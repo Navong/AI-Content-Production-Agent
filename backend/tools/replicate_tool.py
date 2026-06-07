@@ -1,6 +1,8 @@
-"""Replicate (SDXL) image-generation wrapper (Pillar 2: tool layer).
+"""Replicate (FLUX dev) image-generation wrapper (Pillar 2: tool layer).
 
-Calls Replicate's hosted SDXL — no local GPU, so the live demo runs anywhere.
+Calls Replicate's hosted FLUX.1 [dev] — no local GPU, so the live demo runs
+anywhere. FLUX is chosen over SDXL for markedly better prompt adherence and
+hands/text rendering (the exact weaknesses the Vision scorer flags on SDXL).
 Returns {url, prompt_used, model, latency_ms} and retries with exponential
 backoff on transient API errors. The Replicate client reads REPLICATE_API_TOKEN
 from the environment automatically.
@@ -14,15 +16,8 @@ import replicate
 
 logger = logging.getLogger(__name__)
 
-# Pinned SDXL version for reproducible output across runs.
-SDXL_MODEL = (
-    "stability-ai/sdxl:"
-    "7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc"
-)
-NEGATIVE_PROMPT = (
-    "lowres, blurry, watermark, text, signature, deformed, extra limbs, "
-    "bad anatomy, jpeg artifacts"
-)
+# Replicate "official model" — referenced by name, no version hash needed.
+FLUX_MODEL = "black-forest-labs/flux-dev"
 MAX_ATTEMPTS = 3
 
 
@@ -44,13 +39,15 @@ def generate_image(prompt: str, style_tags: list[str] | None = None) -> dict:
         start = time.monotonic()
         try:
             output = replicate.run(
-                SDXL_MODEL,
+                FLUX_MODEL,
                 input={
+                    # FLUX has no negative_prompt; it uses aspect_ratio, not w/h.
                     "prompt": full_prompt,
-                    "negative_prompt": NEGATIVE_PROMPT,
-                    "width": 1024,
-                    "height": 1024,
+                    "aspect_ratio": "1:1",
                     "num_outputs": 1,
+                    "output_format": "png",
+                    "num_inference_steps": 28,
+                    "guidance": 3.5,
                 },
             )
             url = _extract_url(output)
@@ -61,7 +58,7 @@ def generate_image(prompt: str, style_tags: list[str] | None = None) -> dict:
             return {
                 "url": url,
                 "prompt_used": full_prompt,
-                "model": SDXL_MODEL.split(":")[0],
+                "model": FLUX_MODEL,
                 "latency_ms": latency_ms,
             }
         except Exception as e:  # noqa: BLE001 - retry any API/transport error
