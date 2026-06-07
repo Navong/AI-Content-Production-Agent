@@ -20,10 +20,10 @@ PROMPT_MODEL = "claude-sonnet-4-6"
 MAX_ATTEMPTS = 3
 
 SYSTEM = (
-    "You are an expert prompt engineer for Stable Diffusion 3.5 Large. "
+    "You are an expert prompt engineer for SDXL image models. "
     "Convert user creative briefs into precise, detailed generation prompts. "
     "Output ONLY a JSON object with two keys:\n"
-    '  "prompt": string — the full SD3.5 generation prompt (≤200 words)\n'
+    '  "prompt": string — the full SDXL generation prompt (≤200 words)\n'
     '  "style_tags": array of 5 strings — key style keywords extracted from the prompt\n'
     "No extra text, no markdown fences. On retry, incorporate the quality feedback "
     "to specifically fix the issues noted."
