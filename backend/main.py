@@ -1,19 +1,22 @@
-"""FastAPI entrypoint — SSE streaming + HITL approval.
+"""FastAPI entrypoint — SSE streaming + HITL approval + run logging.
 
 Endpoints:
   GET  /health
-  POST /api/generate  → streams node events as SSE while the graph runs;
-                        pauses at HITL gate and sends `awaiting_approval`
-  POST /api/approve   → resumes the paused graph via Command(resume=...)
-                        and streams the final `done` event
+  GET  /api/runs            → last N completed runs (from runs.jsonl)
+  POST /api/generate        → streams node events as SSE; pauses at HITL gate
+  POST /api/approve         → resumes paused graph, streams done event
 
-Sessions are kept in an in-memory dict keyed by thread_id (MemorySaver
-backs the graph checkpoints; swap to SqliteSaver for cross-restart durability).
+Each run is logged to runs.jsonl on completion so the /dashboard page has
+persistent history. LangSmith receives metadata tags (brief_length, project,
+iterations_used, final_score) on every run for the observability pillar.
 """
 from __future__ import annotations
 
 import json
 import logging
+import os
+from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 
 from dotenv import load_dotenv
@@ -40,8 +43,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# In-memory session registry: thread_id -> {"status": str, "config": dict}
+# In-memory session registry: thread_id -> {status, config, brief, started_at}
 sessions: dict[str, dict] = {}
+
+RUNS_FILE = Path(__file__).parent / "runs.jsonl"
+
+
+# ---------------------------------------------------------------------------
+# Run log helpers (Pillar 5: observability)
+# ---------------------------------------------------------------------------
+
+def _log_run(thread_id: str, status: str, final_score: int, iterations: int) -> None:
+    """Append one completed-run record to runs.jsonl."""
+    session = sessions.get(thread_id, {})
+    record = {
+        "thread_id": thread_id,
+        "brief": session.get("brief", ""),
+        "brief_length": len(session.get("brief", "")),
+        "final_score": final_score,
+        "iterations_used": iterations,
+        "status": status,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    with RUNS_FILE.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _read_runs(limit: int = 50) -> list[dict]:
+    if not RUNS_FILE.exists():
+        return []
+    lines = RUNS_FILE.read_text(encoding="utf-8").strip().splitlines()
+    records = []
+    for line in lines:
+        try:
+            records.append(json.loads(line))
+        except json.JSONDecodeError:
+            pass
+    return list(reversed(records))[:limit]
 
 
 # ---------------------------------------------------------------------------
@@ -65,22 +103,29 @@ def _sse(payload: dict) -> dict:
     return {"data": json.dumps(payload)}
 
 
-async def _stream_graph(inputs, cfg: dict):
-    """Async generator: yield SSE dicts for every graph update chunk."""
+async def _stream_graph(inputs, cfg: dict, session_id: str):
+    """Yield SSE dicts for every graph update chunk."""
+    score_at_pause = 0
+    iteration_at_pause = 0
+
     async for chunk in graph.astream(inputs, cfg, stream_mode="updates"):
 
         # ── HITL interrupt ────────────────────────────────────────────────
         if "__interrupt__" in chunk:
             p = chunk["__interrupt__"][0].value
-            sessions[cfg["configurable"]["thread_id"]]["status"] = "awaiting_approval"
+            score_at_pause = p.get("score", 0)
+            iteration_at_pause = p.get("iteration", 0)
+            sessions[session_id]["status"] = "awaiting_approval"
+            sessions[session_id]["score_at_pause"] = score_at_pause
+            sessions[session_id]["iteration_at_pause"] = iteration_at_pause
             yield _sse({
                 "event": "awaiting_approval",
                 "image_url": p.get("image_url", ""),
-                "score": p.get("score", 0),
+                "score": score_at_pause,
                 "brief": p.get("brief", ""),
-                "iteration": p.get("iteration", 0),
+                "iteration": iteration_at_pause,
             })
-            return  # graph is paused; /api/approve resumes it
+            return
 
         # ── Worker node updates ───────────────────────────────────────────
         for node_name, updates in chunk.items():
@@ -109,9 +154,15 @@ async def _stream_graph(inputs, cfg: dict):
                 })
 
             elif node_name == "hitl_gate" and updates.get("status"):
-                # Resume leg of hitl_gate (after Command(resume=...))
                 status = updates["status"]
-                sessions[cfg["configurable"]["thread_id"]]["status"] = status
+                sessions[session_id]["status"] = status
+                # Log the completed run
+                _log_run(
+                    thread_id=session_id,
+                    status=status,
+                    final_score=sessions[session_id].get("score_at_pause", 0),
+                    iterations=sessions[session_id].get("iteration_at_pause", 0),
+                )
                 yield _sse({"event": "done", "status": status})
 
 
@@ -124,17 +175,35 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/runs")
+def get_runs(limit: int = 50):
+    return _read_runs(limit)
+
+
 @app.post("/api/generate")
 async def generate(body: GenerateRequest):
     thread_id = str(uuid4())
-    cfg = {"configurable": {"thread_id": thread_id}}
-    sessions[thread_id] = {"status": "running", "config": cfg}
+    cfg = {
+        "configurable": {"thread_id": thread_id},
+        # LangSmith metadata (Pillar 5: observability)
+        "run_name": "content-production-run",
+        "metadata": {
+            "project": "content-production-agent",
+            "brief_length": len(body.brief),
+        },
+        "tags": ["production", "content-agent"],
+    }
+    sessions[thread_id] = {
+        "status": "running",
+        "config": cfg,
+        "brief": body.brief,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
 
     async def stream():
-        # First event: send thread_id so the frontend can reference it for approval.
         yield _sse({"event": "session", "thread_id": thread_id})
         try:
-            async for evt in _stream_graph(initial_state(body.brief), cfg):
+            async for evt in _stream_graph(initial_state(body.brief), cfg, thread_id):
                 yield evt
         except Exception as exc:
             logger.exception("graph error")
@@ -153,7 +222,9 @@ async def approve(body: ApproveRequest):
 
     async def stream():
         try:
-            async for evt in _stream_graph(Command(resume={"action": body.action}), cfg):
+            async for evt in _stream_graph(
+                Command(resume={"action": body.action}), cfg, body.thread_id
+            ):
                 yield evt
         except Exception as exc:
             logger.exception("resume error")

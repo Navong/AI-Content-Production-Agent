@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback } from "react";
+import Link from "next/link";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -242,11 +243,19 @@ export default function Home() {
   return (
     <main className="flex min-h-screen flex-col bg-neutral-950 text-neutral-100">
       {/* Header */}
-      <header className="border-b border-neutral-800 px-8 py-4">
-        <h1 className="text-lg font-semibold tracking-tight">AI Content Production Agent</h1>
-        <p className="text-xs text-neutral-500">
-          Brief → prompt engineering → image generation → quality scoring → human approval
-        </p>
+      <header className="flex items-center justify-between border-b border-neutral-800 px-8 py-4">
+        <div>
+          <h1 className="text-lg font-semibold tracking-tight">AI Content Production Agent</h1>
+          <p className="text-xs text-neutral-500">
+            Brief → prompt engineering → image generation → quality scoring → human approval
+          </p>
+        </div>
+        <Link
+          href="/dashboard"
+          className="rounded-lg border border-neutral-700 px-4 py-2 text-sm transition hover:border-neutral-500"
+        >
+          Dashboard →
+        </Link>
       </header>
 
       <div className="flex flex-1 gap-0">

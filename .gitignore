@@ -12,6 +12,9 @@ frontend/.next/
 frontend/out/
 frontend/next-env.d.ts.bak
 
+# Runtime data
+backend/runs.jsonl
+
 # Misc
 .DS_Store
 *.log
