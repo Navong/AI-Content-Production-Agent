@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Replicate "official model" — referenced by name, no version hash needed.
 # Generic name so swapping the model later is a one-line change.
-IMAGE_MODEL = "stability-ai/stable-diffusion-3.5-large"
+IMAGE_MODEL = "black-forest-labs/flux-dev"
 MAX_ATTEMPTS = 3
 
 
