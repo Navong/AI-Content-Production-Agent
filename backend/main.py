@@ -5,6 +5,9 @@ Endpoints:
   GET  /api/runs            → last N completed runs (from runs.jsonl)
   POST /api/generate        → streams node events as SSE; pauses at HITL gate
   POST /api/approve         → resumes paused graph, streams done event
+  POST /slack/actions       → signature-verified Slack button callback; resumes
+                              the paused graph (approve/reject) or starts a fresh
+                              run (regenerate) in the background
 
 Each run is logged to runs.jsonl on completion so the /dashboard page has
 persistent history. LangSmith receives metadata tags (brief_length, project,
@@ -12,19 +15,26 @@ iterations_used, final_score) on every run for the observability pillar.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs
 from uuid import uuid4
 
+import requests
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from langgraph.types import Command
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
@@ -34,6 +44,8 @@ from state import initial_state
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
 
 app = FastAPI(title="AI Content Production Agent")
 app.add_middleware(
@@ -101,6 +113,19 @@ class ApproveRequest(BaseModel):
 
 def _sse(payload: dict) -> dict:
     return {"data": json.dumps(payload)}
+
+
+def _make_config(thread_id: str, brief: str) -> dict:
+    """Build the LangGraph run config with LangSmith metadata (Pillar 5)."""
+    return {
+        "configurable": {"thread_id": thread_id},
+        "run_name": "content-production-run",
+        "metadata": {
+            "project": "content-production-agent",
+            "brief_length": len(brief),
+        },
+        "tags": ["production", "content-agent"],
+    }
 
 
 async def _stream_graph(inputs, cfg: dict, session_id: str):
@@ -183,16 +208,7 @@ def get_runs(limit: int = 50):
 @app.post("/api/generate")
 async def generate(body: GenerateRequest):
     thread_id = str(uuid4())
-    cfg = {
-        "configurable": {"thread_id": thread_id},
-        # LangSmith metadata (Pillar 5: observability)
-        "run_name": "content-production-run",
-        "metadata": {
-            "project": "content-production-agent",
-            "brief_length": len(body.brief),
-        },
-        "tags": ["production", "content-agent"],
-    }
+    cfg = _make_config(thread_id, body.brief)
     sessions[thread_id] = {
         "status": "running",
         "config": cfg,
@@ -231,3 +247,167 @@ async def approve(body: ApproveRequest):
             yield _sse({"event": "error", "message": str(exc)})
 
     return EventSourceResponse(stream())
+
+
+# ---------------------------------------------------------------------------
+# Slack interactive approval (Pillar 4: human-in-the-loop, from Slack)
+# ---------------------------------------------------------------------------
+
+def _verify_slack_signature(headers, body: bytes) -> bool:
+    """Validate Slack's v0 request signature (HMAC-SHA256 over the raw body).
+
+    https://api.slack.com/authentication/verifying-requests-from-slack
+    """
+    if not SLACK_SIGNING_SECRET:
+        logger.warning("SLACK_SIGNING_SECRET not set — rejecting Slack action")
+        return False
+    ts = headers.get("x-slack-request-timestamp", "")
+    sig = headers.get("x-slack-signature", "")
+    if not ts or not sig:
+        return False
+    # Reject stale requests (replay-attack guard).
+    try:
+        if abs(time.time() - int(ts)) > 60 * 5:
+            return False
+    except ValueError:
+        return False
+    base = f"v0:{ts}:{body.decode('utf-8')}".encode("utf-8")
+    digest = "v0=" + hmac.new(SLACK_SIGNING_SECRET.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, sig)
+
+
+async def _drive_graph(inputs, cfg: dict, thread_id: str) -> str | None:
+    """Run the graph until it pauses at the HITL gate or finishes.
+
+    Returns the terminal status (e.g. "approved" / "reject") when the run ends,
+    or None if it paused again (hitl_gate already posted a fresh Slack card).
+    Mirrors _stream_graph's bookkeeping without the SSE plumbing.
+    """
+    async for chunk in graph.astream(inputs, cfg, stream_mode="updates"):
+        if "__interrupt__" in chunk:
+            p = chunk["__interrupt__"][0].value
+            sessions[thread_id]["status"] = "awaiting_approval"
+            sessions[thread_id]["score_at_pause"] = p.get("score", 0)
+            sessions[thread_id]["iteration_at_pause"] = p.get("iteration", 0)
+            return None
+        for node_name, updates in chunk.items():
+            if (
+                node_name == "hitl_gate"
+                and isinstance(updates, dict)
+                and updates.get("status")
+            ):
+                status = updates["status"]
+                sessions[thread_id]["status"] = status
+                _log_run(
+                    thread_id=thread_id,
+                    status=status,
+                    final_score=sessions[thread_id].get("score_at_pause", 0),
+                    iterations=sessions[thread_id].get("iteration_at_pause", 0),
+                )
+                return status
+    return None
+
+
+def _slack_update(response_url: str, text: str) -> None:
+    """Replace the original Slack card with a result message (best-effort)."""
+    try:
+        requests.post(
+            response_url,
+            json={"replace_original": True, "text": text},
+            timeout=10,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Slack response_url update failed: %s", exc)
+
+
+async def _handle_slack_decision(
+    thread_id: str, action: str, response_url: str, user: str
+) -> None:
+    """Resume (approve/reject) or kick off a fresh run (regenerate) for Slack."""
+    try:
+        if action == "regenerate":
+            brief = sessions[thread_id]["brief"]
+            new_tid = str(uuid4())
+            new_cfg = _make_config(new_tid, brief)
+            sessions[new_tid] = {
+                "status": "running",
+                "config": new_cfg,
+                "brief": brief,
+                "started_at": datetime.now(timezone.utc).isoformat(),
+            }
+            status = await _drive_graph(initial_state(brief, new_tid), new_cfg, new_tid)
+            if status is None:
+                _slack_update(
+                    response_url,
+                    f"🔁 *Regenerating* (requested by @{user}) — a new draft is on its way.",
+                )
+            else:
+                _slack_update(response_url, f"Run ended with status *{status}*.")
+            return
+
+        cfg = sessions[thread_id]["config"]
+        status = await _drive_graph(Command(resume={"action": action}), cfg, thread_id)
+        label = {"approve": "✅ *Approved*", "reject": "❌ *Rejected*"}.get(
+            action, f"*{action}*"
+        )
+        _slack_update(response_url, f"{label} by @{user}. Run status: *{status}*.")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Slack decision error")
+        _slack_update(response_url, f"⚠️ Couldn't process *{action}*: {exc}")
+
+
+@app.post("/slack/actions")
+async def slack_actions(request: Request):
+    """Receive Block Kit button clicks, verify them, and drive the graph.
+
+    Slack requires a response within 3s, so we acknowledge immediately (replacing
+    the card) and finish the graph work in the background, updating the message
+    via the payload's response_url when done.
+    """
+    raw = await request.body()
+    if not _verify_slack_signature(request.headers, raw):
+        raise HTTPException(status_code=403, detail="invalid Slack signature")
+
+    form = parse_qs(raw.decode("utf-8"))
+    payload_raw = form.get("payload", [None])[0]
+    if not payload_raw:
+        raise HTTPException(status_code=400, detail="missing payload")
+    payload = json.loads(payload_raw)
+
+    actions = payload.get("actions") or []
+    if not actions:
+        return JSONResponse({"text": "No action received."})
+
+    action_id = actions[0].get("action_id", "")
+    thread_id = actions[0].get("value", "")
+    response_url = payload.get("response_url", "")
+    user = (payload.get("user") or {}).get("username", "someone")
+
+    # "open_app" is a URL button — Slack handles it client-side, no callback work.
+    if action_id == "open_app":
+        return JSONResponse({})
+
+    if action_id not in ("approve", "reject", "regenerate"):
+        return JSONResponse({"text": f"Unknown action: {action_id}"})
+
+    if thread_id not in sessions:
+        return JSONResponse(
+            {
+                "replace_original": True,
+                "text": "⚠️ This run is no longer available (the server may have restarted).",
+            }
+        )
+
+    # Acknowledge fast; do the graph work in the background.
+    asyncio.create_task(
+        _handle_slack_decision(thread_id, action_id, response_url, user)
+    )
+
+    pending = {
+        "approve": "✅ Approving…",
+        "reject": "❌ Rejecting…",
+        "regenerate": "🔁 Regenerating…",
+    }[action_id]
+    return JSONResponse(
+        {"replace_original": True, "text": f"{pending} (requested by @{user})"}
+    )

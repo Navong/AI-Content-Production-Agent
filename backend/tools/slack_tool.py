@@ -1,11 +1,13 @@
-"""Slack notification for the HITL gate (Pillar 4 support).
+"""Slack notification + interactive approval for the HITL gate (Pillar 4).
 
 Posts a Block Kit card to an incoming webhook when content is ready for review.
-Notify-only by design: an incoming webhook can render a card and a *URL* button
-(which just opens a link — no Slack app needed), but it cannot receive button
-*actions*. Those require a configured Slack app with an interactivity Request URL.
-So the card links back to the Next.js app, where approve/reject actually happens
-(/api/approve -> Command(resume=...)).
+The card carries three interactive buttons — Approve / Regenerate / Reject —
+whose action payloads are delivered to the backend's POST /slack/actions endpoint
+(requires the owning Slack app to have Interactivity enabled with that Request
+URL). The handler verifies the Slack signature and resumes the paused graph via
+Command(resume=...), so a reviewer can drive the whole loop from Slack. A plain
+"Open in app" URL button is kept as a fallback that works even without
+interactivity configured.
 """
 from __future__ import annotations
 
@@ -26,9 +28,13 @@ def _score_badge(score: int) -> str:
 
 
 def send_approval_request(
-    image_url: str, score: int, brief: str, iteration: int
+    image_url: str, score: int, brief: str, iteration: int, thread_id: str = ""
 ) -> bool:
-    """POST a review card to Slack. Returns True on success."""
+    """POST a review card to Slack. Returns True on success.
+
+    `thread_id` is embedded in each button's `value` so POST /slack/actions knows
+    which paused run to resume.
+    """
     if not SLACK_WEBHOOK_URL:
         raise RuntimeError("SLACK_WEBHOOK_URL is not set")
 
@@ -51,13 +57,40 @@ def send_approval_request(
         {"type": "image", "image_url": image_url, "alt_text": "generated image"},
         {
             "type": "actions",
+            "block_id": "hitl_decision",
             "elements": [
                 {
                     "type": "button",
-                    "text": {"type": "plain_text", "text": "Review in app"},
-                    "url": APP_URL,
+                    "action_id": "approve",
+                    "text": {"type": "plain_text", "text": "✅ Approve"},
                     "style": "primary",
-                }
+                    "value": thread_id,
+                },
+                {
+                    "type": "button",
+                    "action_id": "regenerate",
+                    "text": {"type": "plain_text", "text": "🔁 Regenerate"},
+                    "value": thread_id,
+                },
+                {
+                    "type": "button",
+                    "action_id": "reject",
+                    "text": {"type": "plain_text", "text": "❌ Reject"},
+                    "style": "danger",
+                    "value": thread_id,
+                    "confirm": {
+                        "title": {"type": "plain_text", "text": "Reject this draft?"},
+                        "text": {"type": "mrkdwn", "text": "This ends the run without approving."},
+                        "confirm": {"type": "plain_text", "text": "Reject"},
+                        "deny": {"type": "plain_text", "text": "Cancel"},
+                    },
+                },
+                {
+                    "type": "button",
+                    "action_id": "open_app",
+                    "text": {"type": "plain_text", "text": "Open in app ↗"},
+                    "url": APP_URL,
+                },
             ],
         },
         {
@@ -65,7 +98,7 @@ def send_approval_request(
             "elements": [
                 {
                     "type": "mrkdwn",
-                    "text": "Approve / reject in the app — Slack is notify-only.",
+                    "text": "Approve, regenerate, or reject right here — decisions resume the agent run.",
                 }
             ],
         },

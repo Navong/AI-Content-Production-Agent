@@ -27,6 +27,7 @@ def hitl_gate(state: GraphState) -> dict:
                 state.get("quality_score", 0),
                 state.get("brief", ""),
                 state.get("iteration", 0),
+                state.get("thread_id", ""),
             )
             print(
                 f"[hitl_gate] Slack card sent — score {state.get('quality_score')}/10, "
