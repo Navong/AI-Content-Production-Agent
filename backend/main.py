@@ -173,6 +173,9 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
                 })
 
             elif node_name == "quality_eval":
+                sessions[session_id]["feedback_at_pause"] = updates.get(
+                    "quality_feedback", ""
+                )
                 yield _sse({
                     "event": "score_ready",
                     "score": updates.get("quality_score", 0),
@@ -204,6 +207,27 @@ def health():
 @app.get("/api/runs")
 def get_runs(limit: int = 50):
     return _read_runs(limit)
+
+
+@app.get("/api/session/{thread_id}")
+def get_session(thread_id: str):
+    """Snapshot of one run, used by the 'Review in app' deep link from Slack.
+
+    Sessions are in-memory, so this 404s if the backend restarted since the run
+    paused (same constraint as the LangGraph checkpointer here).
+    """
+    s = sessions.get(thread_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="session not found")
+    return {
+        "thread_id": thread_id,
+        "status": s.get("status", ""),
+        "brief": s.get("brief", ""),
+        "image": s.get("image_at_pause", ""),
+        "score": s.get("score_at_pause", 0),
+        "iteration": s.get("iteration_at_pause", 0),
+        "feedback": s.get("feedback_at_pause", ""),
+    }
 
 
 @app.post("/api/generate")
@@ -293,6 +317,10 @@ async def _drive_graph(inputs, cfg: dict, thread_id: str) -> str | None:
             sessions[thread_id]["image_at_pause"] = p.get("image_url", "")
             return None
         for node_name, updates in chunk.items():
+            if node_name == "quality_eval" and isinstance(updates, dict):
+                sessions[thread_id]["feedback_at_pause"] = updates.get(
+                    "quality_feedback", ""
+                )
             if (
                 node_name == "hitl_gate"
                 and isinstance(updates, dict)

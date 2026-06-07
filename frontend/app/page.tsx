@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, type ReactElement } from "react";
+import { useState, useRef, useEffect, type ReactElement } from "react";
 import Link from "next/link";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -79,13 +79,47 @@ export default function Home() {
   const [feedback, setFeedback] = useState("");
   const [results, setResults] = useState<IterationResult[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
+  const [notice, setNotice] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
   const iterRef = useRef(0);
   const imageRef = useRef("");
   const threadRef = useRef("");
 
-  const running = status === "running" || status === "paused";
+  // Deep link from Slack's "Review in app" button: ?thread=<id> hydrates the
+  // paused review state so Approve/Reject work straight from the web.
+  useEffect(() => {
+    const t = new URLSearchParams(window.location.search).get("thread");
+    if (!t) return;
+    (async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/session/${t}`);
+        if (res.status === 404) {
+          setNotice("That review link has expired — the run is no longer available.");
+          return;
+        }
+        if (!res.ok) return;
+        const s = await res.json();
+        threadRef.current = t;
+        setBrief(s.brief ?? "");
+        setScore(s.score ?? 0);
+        setFeedback(s.feedback ?? "");
+        setIteration(s.iteration ?? 0);
+        if (s.image) {
+          imageRef.current = s.image;
+          setImage(s.image);
+        }
+        if (s.status === "awaiting_approval") {
+          setActiveNode("hitl_gate");
+          setStatus("paused");
+        } else if (s.status === "approved" || s.status === "rejected") {
+          setStatus(s.status);
+        }
+      } catch {
+        /* network error — leave the studio in its idle state */
+      }
+    })();
+  }, []);
 
   // ── stream handling ─────────────────────────────────────────────────────────
 
@@ -299,6 +333,18 @@ export default function Home() {
           ))}
         </div>
       </section>
+
+      {notice && (
+        <div className="mt-5 flex items-center justify-between rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          <span>{notice}</span>
+          <button
+            onClick={() => setNotice("")}
+            className="ml-4 shrink-0 text-amber-400/70 transition hover:text-amber-200"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── Pipeline graph ────────────────────────────────────────────────────── */}
       <section className="panel mt-5 rounded-2xl p-5">

@@ -88,8 +88,9 @@ def send_approval_request(
                 {
                     "type": "button",
                     "action_id": "open_app",
-                    "text": {"type": "plain_text", "text": "Open in app ↗"},
-                    "url": APP_URL,
+                    "text": {"type": "plain_text", "text": "Review in app ↗"},
+                    # Deep-link to this specific paused run.
+                    "url": f"{APP_URL.rstrip('/')}/?thread={thread_id}",
                 },
             ],
         },
