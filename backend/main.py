@@ -143,6 +143,7 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
             sessions[session_id]["status"] = "awaiting_approval"
             sessions[session_id]["score_at_pause"] = score_at_pause
             sessions[session_id]["iteration_at_pause"] = iteration_at_pause
+            sessions[session_id]["image_at_pause"] = p.get("image_url", "")
             yield _sse({
                 "event": "awaiting_approval",
                 "image_url": p.get("image_url", ""),
@@ -289,6 +290,7 @@ async def _drive_graph(inputs, cfg: dict, thread_id: str) -> str | None:
             sessions[thread_id]["status"] = "awaiting_approval"
             sessions[thread_id]["score_at_pause"] = p.get("score", 0)
             sessions[thread_id]["iteration_at_pause"] = p.get("iteration", 0)
+            sessions[thread_id]["image_at_pause"] = p.get("image_url", "")
             return None
         for node_name, updates in chunk.items():
             if (
@@ -308,16 +310,31 @@ async def _drive_graph(inputs, cfg: dict, thread_id: str) -> str | None:
     return None
 
 
-def _slack_update(response_url: str, text: str) -> None:
-    """Replace the original Slack card with a result message (best-effort)."""
+def _slack_update(response_url: str, text: str, blocks: list | None = None) -> None:
+    """Replace the original Slack card with a result message (best-effort).
+
+    `text` is always sent as the notification/fallback; `blocks` (when given)
+    render the rich result card so the approved image stays visible.
+    """
+    if not response_url:
+        return
+    payload: dict = {"replace_original": True, "text": text}
+    if blocks:
+        payload["blocks"] = blocks
     try:
-        requests.post(
-            response_url,
-            json={"replace_original": True, "text": text},
-            timeout=10,
-        )
+        requests.post(response_url, json=payload, timeout=10)
     except Exception as exc:  # noqa: BLE001
         logger.warning("Slack response_url update failed: %s", exc)
+
+
+def _result_card(summary: str, image_url: str = "") -> list:
+    """A compact result card: a status line, optionally keeping the image."""
+    blocks: list = [{"type": "section", "text": {"type": "mrkdwn", "text": summary}}]
+    if image_url:
+        blocks.append(
+            {"type": "image", "image_url": image_url, "alt_text": "reviewed image"}
+        )
+    return blocks
 
 
 async def _handle_slack_decision(
@@ -337,20 +354,27 @@ async def _handle_slack_decision(
             }
             status = await _drive_graph(initial_state(brief, new_tid), new_cfg, new_tid)
             if status is None:
-                _slack_update(
-                    response_url,
-                    f"🔁 *Regenerating* (requested by @{user}) — a new draft is on its way.",
-                )
+                # New run paused at the gate → its own fresh card was just posted.
+                summary = f"🔁 *Regenerated* (requested by @{user}) — see the new draft below."
             else:
-                _slack_update(response_url, f"Run ended with status *{status}*.")
+                summary = f"🔁 Regenerate by @{user} — run ended with status *{status}*."
+            _slack_update(response_url, summary, _result_card(summary))
             return
 
         cfg = sessions[thread_id]["config"]
+        score = sessions[thread_id].get("score_at_pause", 0)
+        image = sessions[thread_id].get("image_at_pause", "")
         status = await _drive_graph(Command(resume={"action": action}), cfg, thread_id)
-        label = {"approve": "✅ *Approved*", "reject": "❌ *Rejected*"}.get(
-            action, f"*{action}*"
-        )
-        _slack_update(response_url, f"{label} by @{user}. Run status: *{status}*.")
+
+        if action == "approve":
+            summary = f"✅ *Approved* by @{user} — final score {score}/10."
+            _slack_update(response_url, summary, _result_card(summary, image))
+        elif action == "reject":
+            summary = f"❌ *Rejected* by @{user} — score was {score}/10."
+            _slack_update(response_url, summary, _result_card(summary))
+        else:
+            summary = f"*{action}* by @{user}. Run status: *{status}*."
+            _slack_update(response_url, summary, _result_card(summary))
     except Exception as exc:  # noqa: BLE001
         logger.exception("Slack decision error")
         _slack_update(response_url, f"⚠️ Couldn't process *{action}*: {exc}")
