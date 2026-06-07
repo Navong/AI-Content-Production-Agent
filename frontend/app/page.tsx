@@ -121,6 +121,27 @@ export default function Home() {
     })();
   }, []);
 
+  // While paused for approval, poll the run so a decision made elsewhere (Slack,
+  // another tab) reflects here in near real-time without a manual refresh.
+  useEffect(() => {
+    if (status !== "paused") return;
+    const id = setInterval(async () => {
+      const t = threadRef.current;
+      if (!t) return;
+      try {
+        const res = await fetch(`${API_URL}/api/session/${t}`);
+        if (!res.ok) return;
+        const s = await res.json();
+        if (s.status === "approved" || s.status === "rejected") {
+          setStatus(s.status);
+        }
+      } catch {
+        /* transient — keep polling */
+      }
+    }, 3000);
+    return () => clearInterval(id);
+  }, [status]);
+
   // ── stream handling ─────────────────────────────────────────────────────────
 
   function recordResult(iter: number, img: string, sc: number, fb: string) {

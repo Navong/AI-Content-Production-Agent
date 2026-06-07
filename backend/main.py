@@ -262,6 +262,11 @@ async def approve(body: ApproveRequest):
     cfg = session["config"]
 
     async def stream():
+        # Idempotency: if the run was already decided elsewhere (e.g. in Slack),
+        # don't resume a finished graph — just report the terminal status.
+        if session.get("status") in ("approved", "rejected"):
+            yield _sse({"event": "done", "status": session["status"]})
+            return
         try:
             async for evt in _stream_graph(
                 Command(resume={"action": body.action}), cfg, body.thread_id
@@ -447,6 +452,17 @@ async def slack_actions(request: Request):
             {
                 "replace_original": True,
                 "text": "⚠️ This run is no longer available (the server may have restarted).",
+            }
+        )
+
+    # Idempotency: if the run was already decided elsewhere (e.g. in the web app),
+    # don't resume a finished graph — tell the clicker it's already settled.
+    current = sessions[thread_id].get("status", "")
+    if current in ("approved", "rejected"):
+        return JSONResponse(
+            {
+                "replace_original": True,
+                "text": f"This run was already *{current}* — no further action needed.",
             }
         )
 
