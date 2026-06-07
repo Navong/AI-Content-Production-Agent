@@ -1,11 +1,12 @@
-"""Replicate (FLUX dev) image-generation wrapper (Pillar 2: tool layer).
+"""Replicate image-generation wrapper (Pillar 2: tool layer).
 
-Calls Replicate's hosted FLUX.1 [dev] — no local GPU, so the live demo runs
-anywhere. FLUX is chosen over SDXL for markedly better prompt adherence and
-hands/text rendering (the exact weaknesses the Vision scorer flags on SDXL).
-Returns {url, prompt_used, model, latency_ms} and retries with exponential
-backoff on transient API errors. The Replicate client reads REPLICATE_API_TOKEN
-from the environment automatically.
+Calls Replicate's hosted Stable Diffusion 3.5 Large — no local GPU, so the live
+demo runs anywhere. SD 3.5 Large is Stability's current flagship: a large jump
+over SDXL on prompt adherence and typography, and it keeps the project in the
+Stability / ComfyUI model family Sweetndata works in. Returns
+{url, prompt_used, model, latency_ms} and retries with exponential backoff on
+transient API errors. The Replicate client reads REPLICATE_API_TOKEN from the
+environment automatically.
 """
 from __future__ import annotations
 
@@ -17,7 +18,8 @@ import replicate
 logger = logging.getLogger(__name__)
 
 # Replicate "official model" — referenced by name, no version hash needed.
-FLUX_MODEL = "black-forest-labs/flux-dev"
+# Generic name so swapping the model later is a one-line change.
+IMAGE_MODEL = "stability-ai/stable-diffusion-3.5-large"
 MAX_ATTEMPTS = 3
 
 
@@ -39,15 +41,11 @@ def generate_image(prompt: str, style_tags: list[str] | None = None) -> dict:
         start = time.monotonic()
         try:
             output = replicate.run(
-                FLUX_MODEL,
+                IMAGE_MODEL,
                 input={
-                    # FLUX has no negative_prompt; it uses aspect_ratio, not w/h.
                     "prompt": full_prompt,
                     "aspect_ratio": "1:1",
-                    "num_outputs": 1,
                     "output_format": "png",
-                    "num_inference_steps": 28,
-                    "guidance": 3.5,
                 },
             )
             url = _extract_url(output)
@@ -58,7 +56,7 @@ def generate_image(prompt: str, style_tags: list[str] | None = None) -> dict:
             return {
                 "url": url,
                 "prompt_used": full_prompt,
-                "model": FLUX_MODEL,
+                "model": IMAGE_MODEL,
                 "latency_ms": latency_ms,
             }
         except Exception as e:  # noqa: BLE001 - retry any API/transport error
