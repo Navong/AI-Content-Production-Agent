@@ -10,9 +10,12 @@ from __future__ import annotations
 
 import base64
 import json
+import time
 
 import anthropic
 import requests
+
+MAX_ATTEMPTS = 3
 
 VISION_MODEL = "claude-opus-4-8"
 
@@ -64,31 +67,44 @@ def _fetch_as_base64(image_url: str) -> tuple[str, str]:
 def score_image(image_url: str, original_brief: str) -> dict:
     """Return {score, composition, style_match, issues, suggested_fix}."""
     media_type, data = _fetch_as_base64(image_url)
-    resp = _get_client().messages.create(
-        model=VISION_MODEL,
-        max_tokens=1024,
-        system=SYSTEM,
-        output_config={"format": {"type": "json_schema", "schema": SCORE_SCHEMA}},
-        messages=[
-            {
-                "role": "user",
-                "content": [
+
+    last_err: Exception | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = _get_client().messages.create(
+                model=VISION_MODEL,
+                max_tokens=1024,
+                system=SYSTEM,
+                output_config={"format": {"type": "json_schema", "schema": SCORE_SCHEMA}},
+                messages=[
                     {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": data,
-                        },
-                    },
-                    {
-                        "type": "text",
-                        "text": f"Creative brief:\n{original_brief}\n\nScore this image.",
-                    },
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": data,
+                                },
+                            },
+                            {
+                                "type": "text",
+                                "text": f"Creative brief:\n{original_brief}\n\nScore this image.",
+                            },
+                        ],
+                    }
                 ],
-            }
-        ],
-    )
+            )
+            break
+        except anthropic.APIStatusError as e:
+            last_err = e
+            if e.status_code == 529 and attempt < MAX_ATTEMPTS:
+                time.sleep(2 ** (attempt - 1))
+                continue
+            raise
+    else:
+        raise RuntimeError(f"score_image failed after {MAX_ATTEMPTS} attempts: {last_err}")
 
     # Structured outputs guarantee the first text block is schema-valid JSON.
     text = next((b.text for b in resp.content if b.type == "text"), None)

@@ -10,11 +10,14 @@ lives here so the router stays pure.
 """
 from __future__ import annotations
 
+import time
+
 import anthropic
 
 from state import GraphState
 
 PROMPT_MODEL = "claude-sonnet-4-6"
+MAX_ATTEMPTS = 3
 
 SYSTEM = (
     "You are an expert prompt engineer for Stable Diffusion 3.5 Large. "
@@ -49,12 +52,24 @@ def prompt_engineer(state: GraphState) -> dict:
             f"\n\nRevise the prompt to directly address the critique."
         )
 
-    resp = _get_client().messages.create(
-        model=PROMPT_MODEL,
-        max_tokens=512,
-        system=SYSTEM,
-        messages=[{"role": "user", "content": user_content}],
-    )
+    last_err: Exception | None = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        try:
+            resp = _get_client().messages.create(
+                model=PROMPT_MODEL,
+                max_tokens=512,
+                system=SYSTEM,
+                messages=[{"role": "user", "content": user_content}],
+            )
+            break
+        except anthropic.APIStatusError as e:
+            last_err = e
+            if e.status_code == 529 and attempt < MAX_ATTEMPTS:
+                time.sleep(2 ** (attempt - 1))
+                continue
+            raise
+    else:
+        raise RuntimeError(f"prompt_engineer failed after {MAX_ATTEMPTS} attempts: {last_err}")
 
     import json
     text = resp.content[0].text.strip()
