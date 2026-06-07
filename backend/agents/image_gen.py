@@ -1,24 +1,30 @@
-"""ImageGen node — turns the refined prompt into an image (Pillar 2: tool layer).
+"""ImageGen node — calls the Replicate tool and logs to history.
 
-Day 2/3 will delegate to tools.replicate_tool.generate_image(). For now it
-returns a placeholder URL and logs the attempt to `history`.
+Returns the image URL and appends one entry to the additive `history` list so
+every iteration is preserved in shared state for the dashboard and LangSmith.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from state import GraphState
+from tools.replicate_tool import generate_image
 
 
 def image_gen(state: GraphState) -> dict:
-    # TODO(day2/day3): url = generate_image(state["refined_prompt"], state["style_tags"])["url"]
-    url = "https://placehold.co/1024x1024/png?text=stub+render"
+    result = generate_image(state["refined_prompt"], state.get("style_tags"))
 
     entry = {
         "iteration": state.get("iteration", 0),
-        "prompt": state.get("refined_prompt", ""),
-        "url": url,
+        "prompt": result["prompt_used"],
+        "url": result["url"],
+        "model": result["model"],
+        "latency_ms": result["latency_ms"],
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
-    # history has an additive reducer, so returning [entry] appends one row.
-    return {"generated_url": url, "history": [entry]}
+    print(
+        f"[image_gen] iteration {state.get('iteration', 0)}: "
+        f"{result['model']} in {result['latency_ms']}ms -> {result['url']}"
+    )
+    # history has an additive reducer — returning [entry] appends one row.
+    return {"generated_url": result["url"], "history": [entry]}

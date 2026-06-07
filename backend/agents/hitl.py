@@ -1,28 +1,39 @@
 """HITL gate node (Pillar 4: human-in-the-loop).
 
-Uses LangGraph's native `interrupt()`: the graph pauses here and the call to
-`graph.invoke(...)` returns with an `__interrupt__` payload. The run resumes when
-the caller invokes the graph again with `Command(resume={"action": ...})` on the
-same `thread_id`. This is durable (backed by the checkpointer) — no hand-rolled
-in-memory session dict.
-
-Slack is notify-only by default: an incoming webhook can POST a card, but
-interactive button clicks need a configured Slack app with an interactivity
-Request URL. The actual approve/reject decision flows through the Next.js UI,
-which calls /api/approve -> Command(resume=...).
+Fires a Slack notification card, then pauses the graph via LangGraph's native
+interrupt(). The run resumes when the caller invokes the graph again with
+Command(resume={"action": "approve" | "reject" | "regenerate"}) on the same
+thread_id.
 """
 from __future__ import annotations
+
+import os
 
 from langgraph.types import interrupt
 
 from state import GraphState
 
-# from tools.slack_tool import send_approval_request  # wired on Day 2
+_slack_enabled = bool(os.getenv("SLACK_WEBHOOK_URL"))
 
 
 def hitl_gate(state: GraphState) -> dict:
-    # TODO(day2): send_approval_request(state["generated_url"], state["quality_score"],
-    #             state["brief"], state.get("iteration", 0))  # notify-only
+    # Fire the Slack notification (best-effort — don't let a Slack error
+    # block the approval flow).
+    if _slack_enabled:
+        try:
+            from tools.slack_tool import send_approval_request
+            send_approval_request(
+                state.get("generated_url", ""),
+                state.get("quality_score", 0),
+                state.get("brief", ""),
+                state.get("iteration", 0),
+            )
+            print(
+                f"[hitl_gate] Slack card sent — score {state.get('quality_score')}/10, "
+                f"iteration {state.get('iteration', 0)}"
+            )
+        except Exception as e:  # noqa: BLE001
+            print(f"[hitl_gate] Slack notify failed (non-fatal): {e}")
 
     decision = interrupt(
         {
@@ -34,7 +45,6 @@ def hitl_gate(state: GraphState) -> dict:
         }
     )
 
-    # `decision` is whatever the caller passed to Command(resume=...).
     action = (decision or {}).get("action", "approved")
     status = "approved" if action in ("approve", "approved") else action
     return {"status": status}

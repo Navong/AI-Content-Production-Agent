@@ -1,18 +1,25 @@
-"""QualityEval node — scores the generated image (Pillar 2: tool layer).
+"""QualityEval node — scores the generated image via Claude Vision.
 
-Day 2/3 will delegate to tools.claude_vision_tool.score_image(), which uses
-claude-opus-4-8 with structured outputs so the score is always a valid object
-(no fragile "ask for JSON / fallback to 5" parsing). For now it returns a
-passing score so the happy path reaches the HITL gate.
+Calls claude_vision_tool.score_image(), which uses claude-opus-4-8 with
+structured outputs to return a schema-valid critique. The `suggested_fix` field
+is stored as quality_feedback so the PromptEngineer can fold it in on retry.
 """
 from __future__ import annotations
 
 from state import GraphState
+from tools.claude_vision_tool import score_image
 
 
 def quality_eval(state: GraphState) -> dict:
-    # TODO(day2/day3): result = score_image(state["generated_url"], state["brief"])
-    score = 9
-    feedback = ""
-    print(f"[quality_eval] iteration {state.get('iteration', 0)}: score {score}/10")
+    result = score_image(state["generated_url"], state["brief"])
+
+    score = result["score"]
+    # Combine issues + suggested_fix into the feedback the retry loop acts on.
+    issues_txt = "; ".join(result.get("issues", []))
+    feedback = f"{issues_txt}\n\nSuggested fix: {result.get('suggested_fix', '')}"
+
+    print(
+        f"[quality_eval] iteration {state.get('iteration', 0)}: "
+        f"score {score}/10 — {result.get('issues', [''])[0][:80]}"
+    )
     return {"quality_score": score, "quality_feedback": feedback}

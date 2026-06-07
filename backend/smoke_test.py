@@ -1,11 +1,8 @@
-"""Day 1 smoke test: run the graph end-to-end with stubs.
+"""Day 3 end-to-end smoke test.
 
-Verifies the StateGraph wiring and the native HITL round-trip:
-  brief -> prompt_engineer -> image_gen -> quality_eval -> hitl_gate (interrupt)
-        -> resume(approve) -> END
-
-If LANGSMITH_TRACING=true and LANGSMITH_API_KEY is set, a trace appears in
-LangSmith under the LANGSMITH_PROJECT. The graph runs locally either way.
+Runs the full graph with a REAL brief — prompt engineering, image generation,
+quality scoring, and the HITL interrupt/resume cycle. Every call lands in
+LangSmith under the `content-production-agent` project.
 
 Run: python smoke_test.py
 """
@@ -20,25 +17,31 @@ from langgraph.types import Command
 from graph import graph
 from state import initial_state
 
+# Deliberately specific brief — should score well and trigger the happy path.
+BRIEF = "a cute robot barista in a Seoul cafe with hangul signage, watercolor style"
+
 
 def main() -> None:
-    cfg = {"configurable": {"thread_id": "smoke-1"}}
+    cfg = {"configurable": {"thread_id": "smoke-day3"}}
 
-    result = graph.invoke(
-        initial_state("a cute robot barista in a Seoul cafe, watercolor"),
-        cfg,
-    )
+    print(f"\nBrief: {BRIEF!r}\n{'-'*60}")
+    result = graph.invoke(initial_state(BRIEF), cfg)
 
-    assert "__interrupt__" in result, "expected the HITL gate to interrupt the run"
+    assert "__interrupt__" in result, "expected HITL gate to interrupt"
     payload = result["__interrupt__"][0].value
-    print("PAUSED at HITL gate ->", payload)
+    print(f"\n{'-'*60}")
+    print(f"PAUSED → score {payload['score']}/10, iteration {payload['iteration']}")
+    print(f"image : {payload['image_url']}")
 
+    # Approve and resume
     final = graph.invoke(Command(resume={"action": "approve"}), cfg)
-    print("FINAL status:", final["status"])
-    print("iterations:", final["iteration"], "| history entries:", len(final["history"]))
+    print(f"\nFINAL status  : {final['status']}")
+    print(f"iterations    : {final['iteration']}")
+    print(f"history entries: {len(final['history'])}")
+    for h in final["history"]:
+        print(f"  iter {h['iteration']}: score n/a → {h['url'][:60]}...")
     assert final["status"] == "approved"
-    assert len(final["history"]) == 1
-    print("OK: graph ran end-to-end.")
+    print("\nOK: full graph ran end-to-end with real APIs.")
 
 
 if __name__ == "__main__":
