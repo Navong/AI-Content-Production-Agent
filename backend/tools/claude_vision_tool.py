@@ -1,13 +1,22 @@
-"""Claude Vision quality scorer. Implemented on Day 2.
+"""Claude Vision quality scorer (Pillar 2: tool layer).
 
-Uses claude-opus-4-8 with structured outputs (output_config.format) so the score
-is always a schema-valid object — no "ask for JSON ONLY / fallback to 5" parsing.
+Scores a generated image against the brief using claude-opus-4-8 with structured
+outputs (output_config.format). Because the response is schema-constrained, the
+JSON is always valid — no "ask for JSON ONLY / fall back to 5" parsing. The
+structured critique (composition, style_match, issues, suggested_fix) is what
+feeds the retry loop and the LangSmith score history.
 """
 from __future__ import annotations
 
+import base64
+import json
+
+import anthropic
+import requests
+
 VISION_MODEL = "claude-opus-4-8"
 
-# The JSON schema the model is constrained to (used on Day 2).
+# Response is constrained to this schema by output_config.format.
 SCORE_SCHEMA = {
     "type": "object",
     "properties": {
@@ -21,10 +30,68 @@ SCORE_SCHEMA = {
     "additionalProperties": False,
 }
 
+SYSTEM = (
+    "You are a meticulous creative director at a generative-AI content studio. "
+    "Score the image strictly against the brief on a 1-10 scale, where 8 or above "
+    "means client-ready. Judge composition, adherence to the brief and style, and "
+    "technical quality (anatomy, artifacts, stray text). Be specific and honest — "
+    "do not inflate scores. `suggested_fix` should be a concrete prompt change."
+)
+
+_client: anthropic.Anthropic | None = None
+
+
+def _get_client() -> anthropic.Anthropic:
+    global _client
+    if _client is None:
+        _client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from env
+    return _client
+
+
+def _fetch_as_base64(image_url: str) -> tuple[str, str]:
+    """Download the image ourselves and return (media_type, base64_data).
+
+    We fetch the bytes rather than passing a URL source so scoring doesn't depend
+    on the remote host allowing Anthropic's fetcher (robots.txt), and so signed /
+    expiring URLs (e.g. Replicate delivery links) work reliably.
+    """
+    r = requests.get(image_url, timeout=30)
+    r.raise_for_status()
+    media_type = r.headers.get("content-type", "image/png").split(";")[0].strip()
+    return media_type, base64.standard_b64encode(r.content).decode("utf-8")
+
 
 def score_image(image_url: str, original_brief: str) -> dict:
-    """TODO(day2): client.messages.create(model=VISION_MODEL,
-    thinking={"type": "adaptive"},
-    output_config={"format": {"type": "json_schema", "schema": SCORE_SCHEMA}}, ...)
-    with the image passed as a vision content block."""
-    raise NotImplementedError("Implemented on Day 2")
+    """Return {score, composition, style_match, issues, suggested_fix}."""
+    media_type, data = _fetch_as_base64(image_url)
+    resp = _get_client().messages.create(
+        model=VISION_MODEL,
+        max_tokens=1024,
+        system=SYSTEM,
+        output_config={"format": {"type": "json_schema", "schema": SCORE_SCHEMA}},
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": data,
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": f"Creative brief:\n{original_brief}\n\nScore this image.",
+                    },
+                ],
+            }
+        ],
+    )
+
+    # Structured outputs guarantee the first text block is schema-valid JSON.
+    text = next((b.text for b in resp.content if b.type == "text"), None)
+    if text is None:
+        raise RuntimeError("vision scorer returned no text block")
+    return json.loads(text)
