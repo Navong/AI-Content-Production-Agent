@@ -252,9 +252,11 @@ export default function Home() {
         </div>
         <Link
           href="/dashboard"
+          target="_blank"
+          rel="noopener noreferrer"
           className="rounded-lg border border-neutral-700 px-4 py-2 text-sm transition hover:border-neutral-500"
         >
-          Dashboard →
+          Dashboard ↗
         </Link>
       </header>
 

@@ -203,7 +203,7 @@ async def generate(body: GenerateRequest):
     async def stream():
         yield _sse({"event": "session", "thread_id": thread_id})
         try:
-            async for evt in _stream_graph(initial_state(body.brief), cfg, thread_id):
+            async for evt in _stream_graph(initial_state(body.brief, thread_id), cfg, thread_id):
                 yield evt
         except Exception as exc:
             logger.exception("graph error")

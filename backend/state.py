@@ -11,6 +11,7 @@ from typing import Annotated, TypedDict
 
 
 class GraphState(TypedDict):
+    thread_id: str                              # session ID (for R2 folder path)
     brief: str                                  # original user input
     refined_prompt: str                         # after PromptEngineer
     style_tags: list[str]                       # extracted style keywords
@@ -22,9 +23,10 @@ class GraphState(TypedDict):
     history: Annotated[list[dict], operator.add]  # all iterations: {iteration, prompt, url, timestamp}
 
 
-def initial_state(brief: str) -> GraphState:
+def initial_state(brief: str, thread_id: str = "") -> GraphState:
     """Build a fresh state for a new run."""
     return {
+        "thread_id": thread_id,
         "brief": brief,
         "refined_prompt": "",
         "style_tags": [],
