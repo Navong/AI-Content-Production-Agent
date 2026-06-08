@@ -60,6 +60,11 @@ def hitl_gate(state: GraphState) -> dict:
         }
     )
 
-    action = (decision or {}).get("action", "approved")
-    status = "approved" if action in ("approve", "approved") else action
+    action = (decision or {}).get("action", "approve")
+    if action in ("approve", "approved"):
+        status = "approved"
+    elif action in ("regenerate", "regenerated"):
+        status = "regenerated"
+    else:
+        status = "rejected"
     return {"status": status}

@@ -150,16 +150,20 @@ def update_on_decision(
         ]
         fallback = f"Approved by {reviewer}"
     else:
+        label = {
+            "rejected": "❌ *Rejected*",
+            "regenerated": "🔁 *Regenerated*",
+        }.get(status, f"*{status}*")
         blocks = [
             {
                 "type": "section",
                 "text": {
                     "type": "mrkdwn",
-                    "text": f"❌ *Rejected by {reviewer}*  ·  {_score_badge(score)}\n_{brief}_",
+                    "text": f"{label} by {reviewer}  ·  {_score_badge(score)}\n_{brief}_",
                 },
             }
         ]
-        fallback = f"Rejected by {reviewer}"
+        fallback = f"{status} by {reviewer}"
 
     resp = requests.post(
         "https://slack.com/api/chat.update",

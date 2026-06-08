@@ -238,14 +238,30 @@ export default function Home() {
   }
 
   async function onAction(action: "approve" | "reject" | "regenerate") {
-    if (action === "regenerate") return onGenerate();
+    if (action === "regenerate") {
+      // Close out the current run first so its Slack card flips to
+      // "🔁 Regenerated", then start a fresh run (which posts its own card).
+      const old = threadRef.current;
+      if (old) {
+        try {
+          await fetch(`${API_URL}/api/approve`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ thread_id: old, action: "regenerate", reviewer: "Studio" }),
+          }).then((r) => r.text()); // drain SSE so the server runs it to completion
+        } catch {
+          /* non-fatal — still start the new run */
+        }
+      }
+      return onGenerate();
+    }
     setStatus("running");
     setActiveNode("hitl_gate");
     try {
       const res = await fetch(`${API_URL}/api/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thread_id: threadRef.current, action }),
+        body: JSON.stringify({ thread_id: threadRef.current, action, reviewer: "Studio" }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await consumeStream(res);

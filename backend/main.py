@@ -185,7 +185,7 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
                     iterations=sessions[session_id].get("iteration_at_pause", 0),
                 )
                 # Update the Slack card in place (bot-token mode only).
-                if status in ("approved", "rejected"):
+                if status in ("approved", "rejected", "regenerated"):
                     try:
                         from tools.slack_tool import update_on_decision
                         update_on_decision(
@@ -271,7 +271,7 @@ async def approve(body: ApproveRequest):
     async def stream():
         # Idempotency: if the run was already decided (e.g. in another tab), don't
         # resume a finished graph — just report the terminal status.
-        if session.get("status") in ("approved", "rejected"):
+        if session.get("status") in ("approved", "rejected", "regenerated"):
             yield _sse({"event": "done", "status": session["status"]})
             return
         try:
