@@ -1,10 +1,10 @@
 """Replicate image-generation wrapper (Pillar 2: tool layer).
 
-Calls Replicate's hosted Stability AI SDXL — the full (non-distilled) base+
-refiner model, Stability's workhorse for high-quality 1024px generations. No
-local GPU, runs anywhere. Returns {url, prompt_used, model, latency_ms} and
-retries with exponential backoff on transient API errors. The Replicate client
-reads REPLICATE_API_TOKEN from the environment automatically.
+Calls Replicate's hosted Black Forest Labs FLUX.1 [schnell] — a fast 4-step
+distilled FLUX that renders in ~1-2s, keeping the live demo and the retry loop
+snappy. No local GPU, runs anywhere. Returns {url, prompt_used, model,
+latency_ms} and retries with exponential backoff on transient API errors. The
+Replicate client reads REPLICATE_API_TOKEN from the environment automatically.
 """
 from __future__ import annotations
 
@@ -15,8 +15,8 @@ import replicate
 
 logger = logging.getLogger(__name__)
 
-# Pinned to an exact version hash (community model, so a version is required).
-IMAGE_MODEL = "stability-ai/sdxl:7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc"
+# Official Replicate model — referenced by name, no version hash needed.
+IMAGE_MODEL = "black-forest-labs/flux-schnell"
 MAX_ATTEMPTS = 3
 
 
@@ -41,13 +41,11 @@ def generate_image(prompt: str, style_tags: list[str] | None = None) -> dict:
                 IMAGE_MODEL,
                 input={
                     "prompt": full_prompt,
-                    "negative_prompt": "worst quality, low quality, blurry, distorted",
-                    "width": 1024,
-                    "height": 1024,
-                    "scheduler": "K_EULER",
-                    "num_inference_steps": 30,  # full SDXL: 25-40 is the sweet spot
-                    "guidance_scale": 7.5,      # standard CFG for SDXL
+                    "aspect_ratio": "1:1",
+                    "num_inference_steps": 4,  # schnell is distilled to <=4 steps
+                    "output_format": "png",
                     "num_outputs": 1,
+                    "go_fast": True,
                 },
             )
             url = _extract_url(output)
