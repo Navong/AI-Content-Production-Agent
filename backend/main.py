@@ -97,6 +97,10 @@ class ApproveRequest(BaseModel):
     thread_id: str
     action: str  # "approve" | "reject" | "regenerate"
     reviewer: str = "Studio"  # shown on the updated Slack card
+    # The iteration the reviewer actually picked in the studio (may not be the
+    # last one the agent generated). Overrides what the approved card shows.
+    image: str = ""
+    score: int | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -266,6 +270,11 @@ async def approve(body: ApproveRequest):
         raise HTTPException(status_code=404, detail="session not found")
 
     session["reviewer"] = body.reviewer or "Studio"
+    # Honor the reviewer's chosen iteration for the approved Slack card / log.
+    if body.image:
+        session["image_at_pause"] = body.image
+    if body.score is not None:
+        session["score_at_pause"] = body.score
     cfg = session["config"]
 
     async def stream():

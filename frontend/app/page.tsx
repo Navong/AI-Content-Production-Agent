@@ -85,6 +85,8 @@ export default function Home() {
   const iterRef = useRef(0);
   const imageRef = useRef("");
   const threadRef = useRef("");
+  const resultsRef = useRef<IterationResult[]>([]);
+  const scoreRef = useRef(0);
 
   // Deep link from Slack's "Review in app" button: ?thread=<id> hydrates the
   // paused review state so Approve/Reject work straight from the web.
@@ -102,6 +104,7 @@ export default function Home() {
         const s = await res.json();
         threadRef.current = t;
         setBrief(s.brief ?? "");
+        scoreRef.current = s.score ?? 0;
         setScore(s.score ?? 0);
         setFeedback(s.feedback ?? "");
         setIteration(s.iteration ?? 0);
@@ -148,13 +151,19 @@ export default function Home() {
     setResults((prev) => {
       const idx = prev.findIndex((r) => r.iteration === iter);
       const entry: IterationResult = { iteration: iter, imageUrl: img, score: sc, feedback: fb };
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = entry;
-        return next;
-      }
-      return [...prev, entry];
+      const next = idx >= 0 ? prev.map((r, i) => (i === idx ? entry : r)) : [...prev, entry];
+      resultsRef.current = next; // mirror for non-render reads (best-iteration pick)
+      return next;
     });
+  }
+
+  // Select a specific iteration as the current/approved one.
+  function selectResult(r: IterationResult) {
+    imageRef.current = r.imageUrl;
+    scoreRef.current = r.score;
+    setImage(r.imageUrl);
+    setScore(r.score);
+    setFeedback(r.feedback);
   }
 
   async function consumeStream(response: Response) {
@@ -178,19 +187,32 @@ export default function Home() {
           break;
 
         case "score_ready":
+          scoreRef.current = msg.score;
           setScore(msg.score);
           setFeedback(msg.feedback ?? "");
           recordResult(iterRef.current, imageRef.current, msg.score, msg.feedback ?? "");
           break;
 
-        case "awaiting_approval":
-          imageRef.current = msg.image_url;
-          setImage(msg.image_url);
-          setScore(msg.score);
+        case "awaiting_approval": {
           setIteration(msg.iteration ?? 0);
+          // Default to the highest-scoring iteration, not just the last one
+          // the agent happened to generate.
+          const all = resultsRef.current;
+          const best = all.length
+            ? all.reduce((a, b) => (b.score >= a.score ? b : a))
+            : null;
+          if (best) {
+            selectResult(best);
+          } else {
+            imageRef.current = msg.image_url;
+            scoreRef.current = msg.score;
+            setImage(msg.image_url);
+            setScore(msg.score);
+          }
           setActiveNode("hitl_gate");
           setStatus("paused");
           break;
+        }
 
         case "done":
           setStatus(msg.status === "approved" ? "approved" : "rejected");
@@ -261,7 +283,14 @@ export default function Home() {
       const res = await fetch(`${API_URL}/api/approve`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ thread_id: threadRef.current, action, reviewer: "Studio" }),
+        body: JSON.stringify({
+          thread_id: threadRef.current,
+          action,
+          reviewer: "Studio",
+          // the iteration the reviewer actually has selected
+          image: imageRef.current,
+          score: scoreRef.current,
+        }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       await consumeStream(res);
@@ -537,11 +566,7 @@ export default function Home() {
                   {results.map((r) => (
                     <button
                       key={r.iteration}
-                      onClick={() => {
-                        setImage(r.imageUrl);
-                        setScore(r.score);
-                        setFeedback(r.feedback);
-                      }}
+                      onClick={() => selectResult(r)}
                       className={`relative shrink-0 overflow-hidden rounded-lg border transition ${
                         image === r.imageUrl
                           ? "border-violet-500"
