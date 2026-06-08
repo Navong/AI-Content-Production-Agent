@@ -234,9 +234,9 @@ def health():
 
 @app.get("/api/config")
 def api_config():
-    """Feature flags the studio reads on load (e.g. show 'Post to X' only when configured)."""
-    from tools.x_tool import x_configured
-    return {"x_enabled": x_configured()}
+    """Feature flags the studio reads on load (e.g. show the publish button only when configured)."""
+    from tools.publish_tool import publish_configured, PLATFORM
+    return {"publish_enabled": publish_configured(), "platform": PLATFORM}
 
 
 @app.get("/api/runs")
@@ -321,31 +321,31 @@ async def approve(body: ApproveRequest):
 
 
 # ---------------------------------------------------------------------------
-# Publish to X (Pillar 2: another tool — distribution)
+# Publish to Facebook (Pillar 2: another tool — distribution)
 # ---------------------------------------------------------------------------
 
-def _publish_to_x(thread_id: str, image: str = "", caption: str = "") -> dict:
-    """Post the approved image + caption to X; idempotent per run.
+def _publish(thread_id: str, image: str = "", caption: str = "") -> dict:
+    """Post the approved image + caption to Facebook; idempotent per run.
 
     Falls back to the paused image and a Claude-generated caption when those
-    aren't supplied. Records the tweet URL on the session and (best-effort)
+    aren't supplied. Records the post URL on the session and (best-effort)
     updates the Slack card.
     """
-    from tools.x_tool import generate_caption, post_tweet
+    from tools.publish_tool import generate_caption, publish
 
     s = sessions.get(thread_id, {})
     if s.get("published_url"):
-        return {"url": s["published_url"], "tweet_id": "", "already": True}
+        return {"url": s["published_url"], "id": "", "already": True}
 
     img = image or s.get("image_at_pause", "")
     cap = caption or generate_caption(s.get("brief", ""))
-    result = post_tweet(img, cap)
+    result = publish(img, cap)
 
     s["published_url"] = result["url"]
     s["published_caption"] = cap
     try:
-        from tools.slack_tool import mark_posted_to_x
-        mark_posted_to_x(thread_id, result["url"])
+        from tools.slack_tool import mark_published
+        mark_published(thread_id, result["url"])
     except Exception as e:  # noqa: BLE001
         logger.warning("Slack posted-update failed (non-fatal): %s", e)
     return result
@@ -353,32 +353,32 @@ def _publish_to_x(thread_id: str, image: str = "", caption: str = "") -> dict:
 
 @app.post("/api/caption")
 def api_caption(body: CaptionRequest):
-    """Return a Claude-generated tweet caption for this run's brief."""
+    """Return a Claude-generated caption for this run's brief."""
     s = sessions.get(body.thread_id)
     if not s:
         raise HTTPException(status_code=404, detail="session not found")
-    from tools.x_tool import generate_caption
+    from tools.publish_tool import generate_caption
     return {"caption": generate_caption(s.get("brief", ""))}
 
 
 @app.post("/api/publish")
 def api_publish(body: PublishRequest):
-    """Post the approved image + caption to X. Returns {url}."""
+    """Post the approved image + caption to Facebook. Returns {url}."""
     s = sessions.get(body.thread_id)
     if not s:
         raise HTTPException(status_code=404, detail="session not found")
-    from tools.x_tool import x_configured
-    if not x_configured():
-        raise HTTPException(status_code=400, detail="X is not configured on the server")
+    from tools.publish_tool import publish_configured, PLATFORM
+    if not publish_configured():
+        raise HTTPException(status_code=400, detail=f"{PLATFORM} is not configured on the server")
     try:
-        return _publish_to_x(body.thread_id, body.image, body.caption)
+        return _publish(body.thread_id, body.image, body.caption)
     except Exception as exc:  # noqa: BLE001
         logger.exception("publish error")
-        raise HTTPException(status_code=502, detail=f"X post failed: {exc}")
+        raise HTTPException(status_code=502, detail=f"{PLATFORM} post failed: {exc}")
 
 
 # ---------------------------------------------------------------------------
-# Slack interactivity — only the "Post to X" button does work (Pillar 4 + 2)
+# Slack interactivity — only the "Publish" button does work (Pillar 4 + 2)
 # ---------------------------------------------------------------------------
 
 def _verify_slack_signature(headers, body: bytes) -> bool:
@@ -400,15 +400,15 @@ def _verify_slack_signature(headers, body: bytes) -> bool:
     return hmac.compare_digest(digest, sig)
 
 
-async def _slack_post_to_x(thread_id: str, response_url: str, user: str) -> None:
-    """Background: publish to X for a Slack 'Post to X' click, then report."""
+async def _slack_publish(thread_id: str, response_url: str, user: str) -> None:
+    """Background: publish to Facebook for a Slack 'Publish' click, then report."""
     import requests as _rq
     try:
-        result = await asyncio.to_thread(_publish_to_x, thread_id)
-        text = f"🐦 Posted to X by @{user} — {result['url']}"
+        result = await asyncio.to_thread(_publish, thread_id)
+        text = f"📘 Posted to Facebook by @{user} — {result['url']}"
     except Exception as exc:  # noqa: BLE001
-        logger.exception("Slack post-to-x error")
-        text = f"⚠️ Couldn't post to X: {exc}"
+        logger.exception("Slack publish error")
+        text = f"⚠️ Couldn't post to Facebook: {exc}"
     try:
         _rq.post(response_url, json={"text": text, "replace_original": False}, timeout=10)
     except Exception:  # noqa: BLE001
@@ -419,7 +419,7 @@ async def _slack_post_to_x(thread_id: str, response_url: str, user: str) -> None
 async def slack_actions(request: Request):
     """Handle Block Kit button clicks.
 
-    Only "post_to_x" does work (verified via signature → publish in background).
+    Only "publish" does work (verified via signature → publish in background).
     URL buttons (open_app / download / view_in_studio) just ACK with 200.
     """
     raw = await request.body()
@@ -440,7 +440,7 @@ async def slack_actions(request: Request):
     response_url = payload.get("response_url", "")
     user = (payload.get("user") or {}).get("username", "someone")
 
-    if action_id != "post_to_x":
+    if action_id != "publish":
         return JSONResponse({})  # URL buttons — nothing to do
 
     if thread_id not in sessions:
@@ -448,11 +448,11 @@ async def slack_actions(request: Request):
             {"replace_original": False, "text": "⚠️ This run is no longer available."}
         )
 
-    from tools.x_tool import x_configured
-    if not x_configured():
+    from tools.publish_tool import publish_configured
+    if not publish_configured():
         return JSONResponse(
-            {"replace_original": False, "text": "⚠️ X publishing isn't configured on the server."}
+            {"replace_original": False, "text": "⚠️ Facebook publishing isn't configured on the server."}
         )
 
-    asyncio.create_task(_slack_post_to_x(thread_id, response_url, user))
-    return JSONResponse({"replace_original": False, "text": f"🐦 Posting to X… (requested by @{user})"})
+    asyncio.create_task(_slack_publish(thread_id, response_url, user))
+    return JSONResponse({"replace_original": False, "text": f"📘 Posting to Facebook… (requested by @{user})"})
