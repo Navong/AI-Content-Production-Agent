@@ -16,6 +16,7 @@ Required env vars:
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 from datetime import datetime, timezone
@@ -91,6 +92,37 @@ def upload_image(image_url: str, thread_id: str, iteration: int) -> str | None:
     permanent_url = f"{public_url}/{key}"
     logger.info("R2 upload ok: %s", permanent_url)
     return permanent_url
+
+
+def put_json(key: str, obj: dict) -> bool:
+    """Store a small JSON object in R2 (used to persist run snapshots)."""
+    if not _r2_configured():
+        return False
+    try:
+        _get_client().put_object(
+            Bucket=os.environ["R2_BUCKET_NAME"],
+            Key=key,
+            Body=json.dumps(obj).encode("utf-8"),
+            ContentType="application/json",
+        )
+        return True
+    except (BotoCoreError, ClientError) as e:
+        logger.warning("R2 put_json failed: %s", e)
+        return False
+
+
+def get_json(key: str) -> dict | None:
+    """Fetch a JSON object from R2, or None if missing / not configured."""
+    if not _r2_configured():
+        return None
+    try:
+        resp = _get_client().get_object(Bucket=os.environ["R2_BUCKET_NAME"], Key=key)
+        return json.loads(resp["Body"].read())
+    except ClientError:
+        return None  # NoSuchKey etc.
+    except (BotoCoreError, ValueError) as e:
+        logger.warning("R2 get_json failed: %s", e)
+        return None
 
 
 def upload_bytes(data: bytes, content_type: str, thread_id: str, label: str) -> str | None:

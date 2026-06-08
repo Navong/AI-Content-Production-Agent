@@ -31,6 +31,18 @@ _ts_by_thread: dict[str, str] = {}
 _card_ctx: dict[str, dict] = {}
 
 
+def get_ts(thread_id: str) -> str:
+    """The Slack message ts for a run (empty if unknown) — for persistence."""
+    return _ts_by_thread.get(thread_id, "")
+
+
+def restore(thread_id: str, ts: str, image: str, score: int, brief: str, reviewer: str) -> None:
+    """Re-seed the in-memory card state after a backend restart (from R2)."""
+    if ts:
+        _ts_by_thread[thread_id] = ts
+    _card_ctx[thread_id] = {"image": image, "score": score, "brief": brief, "reviewer": reviewer}
+
+
 def _score_badge(score: int) -> str:
     if score >= 8:
         return f"🟢 {score}/10"

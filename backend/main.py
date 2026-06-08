@@ -144,6 +144,60 @@ def _make_config(thread_id: str, brief: str) -> dict:
     }
 
 
+# --- Durable run snapshots (R2) ---------------------------------------------
+# sessions + the LangGraph checkpointer are in-memory, so a backend restart
+# (incl. every auto-deploy) wipes paused runs. We persist a JSON snapshot per
+# run to R2 so the review deep link and approval survive restarts. After a
+# restart the graph itself can't be resumed, so approve/reject is finalized
+# directly (see /api/approve).
+
+_SNAPSHOT_KEYS = (
+    "status", "brief", "mode", "product_image_url",
+    "image_at_pause", "score_at_pause", "iteration_at_pause", "feedback_at_pause",
+    "reviewer", "published_url", "published_caption", "started_at",
+)
+
+
+def _persist_session(thread_id: str) -> None:
+    s = sessions.get(thread_id)
+    if not s:
+        return
+    try:
+        from tools.r2_tool import put_json
+        from tools.slack_tool import get_ts
+        snap = {k: s.get(k) for k in _SNAPSHOT_KEYS}
+        snap["slack_ts"] = get_ts(thread_id)
+        put_json(f"sessions/{thread_id}.json", snap)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("persist session failed (non-fatal): %s", e)
+
+
+def _get_session(thread_id: str) -> dict | None:
+    """In-memory session, or rehydrate it from the R2 snapshot after a restart."""
+    s = sessions.get(thread_id)
+    if s:
+        return s
+    try:
+        from tools.r2_tool import get_json
+        snap = get_json(f"sessions/{thread_id}.json")
+    except Exception:  # noqa: BLE001
+        snap = None
+    if not snap:
+        return None
+    snap["_restored"] = True  # graph state is gone — can't resume, finalize directly
+    sessions[thread_id] = snap
+    try:
+        from tools.slack_tool import restore
+        restore(
+            thread_id, snap.get("slack_ts", ""), snap.get("image_at_pause", ""),
+            snap.get("score_at_pause", 0), snap.get("brief", ""),
+            snap.get("reviewer", "Studio"),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return snap
+
+
 async def _stream_graph(inputs, cfg: dict, session_id: str):
     """Yield SSE dicts for every graph update chunk."""
     score_at_pause = 0
@@ -160,6 +214,7 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
             sessions[session_id]["score_at_pause"] = score_at_pause
             sessions[session_id]["iteration_at_pause"] = iteration_at_pause
             sessions[session_id]["image_at_pause"] = p.get("image_url", "")
+            _persist_session(session_id)  # durable snapshot (survives restarts)
             yield _sse({
                 "event": "awaiting_approval",
                 "image_url": p.get("image_url", ""),
@@ -208,6 +263,7 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
                     final_score=sessions[session_id].get("score_at_pause", 0),
                     iterations=sessions[session_id].get("iteration_at_pause", 0),
                 )
+                _persist_session(session_id)  # snapshot the terminal state
                 # Update the Slack card in place (bot-token mode only).
                 if status in ("approved", "rejected", "regenerated"):
                     try:
@@ -250,10 +306,10 @@ def get_runs(limit: int = 50):
 def get_session(thread_id: str):
     """Snapshot of one run, used by the 'Review in app' deep link from Slack.
 
-    Sessions are in-memory, so this 404s if the backend restarted since the run
-    paused (same constraint as the LangGraph checkpointer here).
+    Rehydrated from the R2 snapshot if it's no longer in memory (e.g. after a
+    backend restart), so review deep links survive restarts.
     """
-    s = sessions.get(thread_id)
+    s = _get_session(thread_id)
     if not s:
         raise HTTPException(status_code=404, detail="session not found")
     return {
@@ -314,9 +370,32 @@ async def generate(body: GenerateRequest):
     return EventSourceResponse(stream())
 
 
+def _finalize_decision(thread_id: str, action: str) -> str:
+    """Finalize a decision without resuming the graph (used when the run was
+    rehydrated from R2 after a restart, so the checkpointer state is gone)."""
+    status = (
+        "approved" if action in ("approve", "approved")
+        else "regenerated" if action == "regenerate"
+        else "rejected"
+    )
+    s = sessions[thread_id]
+    s["status"] = status
+    _log_run(thread_id, status, s.get("score_at_pause", 0), s.get("iteration_at_pause", 0))
+    _persist_session(thread_id)
+    try:
+        from tools.slack_tool import update_on_decision
+        update_on_decision(
+            thread_id, status, s.get("image_at_pause", ""), s.get("score_at_pause", 0),
+            s.get("brief", ""), s.get("reviewer", "Studio"),
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Slack card update failed (non-fatal): %s", e)
+    return status
+
+
 @app.post("/api/approve")
 async def approve(body: ApproveRequest):
-    session = sessions.get(body.thread_id)
+    session = _get_session(body.thread_id)
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
 
@@ -326,17 +405,19 @@ async def approve(body: ApproveRequest):
         session["image_at_pause"] = body.image
     if body.score is not None:
         session["score_at_pause"] = body.score
-    cfg = session["config"]
 
     async def stream():
-        # Idempotency: if the run was already decided (e.g. in another tab), don't
-        # resume a finished graph — just report the terminal status.
+        # Idempotency: already decided elsewhere → just report it.
         if session.get("status") in ("approved", "rejected", "regenerated"):
             yield _sse({"event": "done", "status": session["status"]})
             return
+        # Rehydrated after a restart: the graph can't be resumed → finalize directly.
+        if session.get("_restored") or not session.get("config"):
+            yield _sse({"event": "done", "status": _finalize_decision(body.thread_id, body.action)})
+            return
         try:
             async for evt in _stream_graph(
-                Command(resume={"action": body.action}), cfg, body.thread_id
+                Command(resume={"action": body.action}), session["config"], body.thread_id
             ):
                 yield evt
         except Exception as exc:
@@ -359,7 +440,7 @@ def _publish_to_x(thread_id: str, image: str = "", caption: str = "") -> dict:
     """
     from tools.x_tool import generate_caption, post_tweet
 
-    s = sessions.get(thread_id, {})
+    s = _get_session(thread_id) or {}
     if s.get("published_url"):
         return {"url": s["published_url"], "tweet_id": "", "already": True}
 
@@ -369,6 +450,7 @@ def _publish_to_x(thread_id: str, image: str = "", caption: str = "") -> dict:
 
     s["published_url"] = result["url"]
     s["published_caption"] = cap
+    _persist_session(thread_id)
     try:
         from tools.slack_tool import mark_posted_to_x
         mark_posted_to_x(thread_id, result["url"])
@@ -380,7 +462,7 @@ def _publish_to_x(thread_id: str, image: str = "", caption: str = "") -> dict:
 @app.post("/api/caption")
 def api_caption(body: CaptionRequest):
     """Return a Claude-generated tweet caption for this run's brief."""
-    s = sessions.get(body.thread_id)
+    s = _get_session(body.thread_id)
     if not s:
         raise HTTPException(status_code=404, detail="session not found")
     from tools.x_tool import generate_caption
@@ -390,7 +472,7 @@ def api_caption(body: CaptionRequest):
 @app.post("/api/publish")
 def api_publish(body: PublishRequest):
     """Post the approved image + caption to X. Returns {url}."""
-    s = sessions.get(body.thread_id)
+    s = _get_session(body.thread_id)
     if not s:
         raise HTTPException(status_code=404, detail="session not found")
     from tools.x_tool import x_configured
@@ -469,7 +551,7 @@ async def slack_actions(request: Request):
     if action_id != "post_to_x":
         return JSONResponse({})  # URL buttons — nothing to do
 
-    if thread_id not in sessions:
+    if _get_session(thread_id) is None:
         return JSONResponse(
             {"replace_original": False, "text": "⚠️ This run is no longer available."}
         )
