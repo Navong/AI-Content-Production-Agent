@@ -4,6 +4,6 @@
   "installCommand": "cd frontend && npm install",
   "framework": "nextjs",
   "rewrites": [
-    { "source": "/api/:path*", "destination": "https://content-production-agent-production.up.railway.app/api/:path*" }
+    { "source": "/api/:path*", "destination": "https://ai-content-production-agent-production.up.railway.app/api/:path*" }
   ]
 }
