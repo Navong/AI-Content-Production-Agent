@@ -96,6 +96,7 @@ class GenerateRequest(BaseModel):
 class ApproveRequest(BaseModel):
     thread_id: str
     action: str  # "approve" | "reject" | "regenerate"
+    reviewer: str = "Studio"  # shown on the updated Slack card
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +184,20 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
                     final_score=sessions[session_id].get("score_at_pause", 0),
                     iterations=sessions[session_id].get("iteration_at_pause", 0),
                 )
+                # Update the Slack card in place (bot-token mode only).
+                if status in ("approved", "rejected"):
+                    try:
+                        from tools.slack_tool import update_on_decision
+                        update_on_decision(
+                            thread_id=session_id,
+                            status=status,
+                            image_url=sessions[session_id].get("image_at_pause", ""),
+                            score=sessions[session_id].get("score_at_pause", 0),
+                            brief=sessions[session_id].get("brief", ""),
+                            reviewer=sessions[session_id].get("reviewer", "Studio"),
+                        )
+                    except Exception as e:  # noqa: BLE001
+                        logger.warning("Slack card update failed (non-fatal): %s", e)
                 yield _sse({"event": "done", "status": status})
 
 
@@ -250,6 +265,7 @@ async def approve(body: ApproveRequest):
     if not session:
         raise HTTPException(status_code=404, detail="session not found")
 
+    session["reviewer"] = body.reviewer or "Studio"
     cfg = session["config"]
 
     async def stream():
