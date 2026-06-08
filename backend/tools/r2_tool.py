@@ -91,3 +91,26 @@ def upload_image(image_url: str, thread_id: str, iteration: int) -> str | None:
     permanent_url = f"{public_url}/{key}"
     logger.info("R2 upload ok: %s", permanent_url)
     return permanent_url
+
+
+def upload_bytes(data: bytes, content_type: str, thread_id: str, label: str) -> str | None:
+    """Upload raw bytes (e.g. a user-uploaded product photo) to R2.
+
+    Returns the permanent public URL, or None if R2 isn't configured.
+    """
+    if not _r2_configured():
+        return None
+    ext = "png" if "png" in content_type else ("webp" if "webp" in content_type else "jpg")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+    key = f"content-agent/{thread_id}/{label}_{ts}.{ext}"
+    try:
+        _get_client().put_object(
+            Bucket=os.environ["R2_BUCKET_NAME"],
+            Key=key,
+            Body=data,
+            ContentType=content_type,
+        )
+    except (BotoCoreError, ClientError) as e:
+        logger.warning("R2 bytes upload failed: %s", e)
+        return None
+    return f"{os.environ['R2_PUBLIC_URL'].rstrip('/')}/{key}"

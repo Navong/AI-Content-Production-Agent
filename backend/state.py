@@ -12,8 +12,10 @@ from typing import Annotated, TypedDict
 
 class GraphState(TypedDict):
     thread_id: str                              # session ID (for R2 folder path)
-    brief: str                                  # original user input
-    refined_prompt: str                         # after PromptEngineer
+    mode: str                                   # "ad" (product image → ad) | "text" (brief → image)
+    brief: str                                  # text brief, or the product description in ad mode
+    product_image_url: str                      # uploaded product photo (ad mode only)
+    refined_prompt: str                         # after PromptEngineer / Creative Director
     style_tags: list[str]                       # extracted style keywords
     generated_url: str                          # image URL from Replicate
     quality_score: int                          # 1-10 from Claude Vision (0 = not scored yet)
@@ -23,11 +25,15 @@ class GraphState(TypedDict):
     history: Annotated[list[dict], operator.add]  # all iterations: {iteration, prompt, url, timestamp}
 
 
-def initial_state(brief: str, thread_id: str = "") -> GraphState:
+def initial_state(
+    brief: str, thread_id: str = "", mode: str = "text", product_image_url: str = ""
+) -> GraphState:
     """Build a fresh state for a new run."""
     return {
         "thread_id": thread_id,
+        "mode": mode,
         "brief": brief,
+        "product_image_url": product_image_url,
         "refined_prompt": "",
         "style_tags": [],
         "generated_url": "",

@@ -13,14 +13,18 @@ from datetime import datetime, timezone
 
 from state import GraphState
 from tools.r2_tool import upload_image
-from tools.replicate_tool import generate_image
+from tools.replicate_tool import generate_ad, generate_image
 
 
 def image_gen(state: GraphState) -> dict:
     thread_id = state.get("thread_id", "unknown")
     iteration = state.get("iteration", 0)
 
-    result = generate_image(state["refined_prompt"], state.get("style_tags"))
+    if state.get("mode") == "ad" and state.get("product_image_url"):
+        # Stage the uploaded product into an advertising scene.
+        result = generate_ad(state["product_image_url"], state["refined_prompt"])
+    else:
+        result = generate_image(state["refined_prompt"], state.get("style_tags"))
     replicate_url = result["url"]
 
     # Upload to R2 for permanent storage; fall back to Replicate URL if not configured.

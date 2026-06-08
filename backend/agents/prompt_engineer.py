@@ -1,12 +1,14 @@
-"""PromptEngineer node — turns a brief into a generation prompt.
+"""PromptEngineer / Creative Director node.
 
-On a fresh run: brief → SD3.5-ready prompt + style tags.
-On a retry: brief + quality_feedback → revised prompt that directly addresses
-the previous critique (suggested_fix is forwarded verbatim as guidance).
+Two modes:
+  * text — turns a creative brief into an SDXL text-to-image prompt + style tags.
+  * ad   — acts as a creative director: turns a PRODUCT description into an
+           advertising SCENE prompt (the setting around the product) for the
+           ad-inpaint model. The product itself is supplied as an image, so the
+           prompt describes only the environment, lighting, props, and mood.
 
-Uses claude-sonnet-4-6: cheap, fast, and more than capable for prompt rewriting.
-State bookkeeping on retry (incrementing iteration, clearing stale image/score)
-lives here so the router stays pure.
+On retry, the previous critique (suggested_fix) is folded in verbatim.
+Uses claude-sonnet-4-6. Retry bookkeeping lives here so the router stays pure.
 """
 from __future__ import annotations
 
@@ -19,7 +21,7 @@ from state import GraphState
 PROMPT_MODEL = "claude-sonnet-4-6"
 MAX_ATTEMPTS = 3
 
-SYSTEM = (
+SYSTEM_TEXT = (
     "You are an expert prompt engineer for SDXL image models. "
     "Convert user creative briefs into precise, detailed generation prompts. "
     "Output ONLY a JSON object with two keys:\n"
@@ -27,6 +29,20 @@ SYSTEM = (
     '  "style_tags": array of 5 strings — key style keywords extracted from the prompt\n'
     "No extra text, no markdown fences. On retry, incorporate the quality feedback "
     "to specifically fix the issues noted."
+)
+
+SYSTEM_AD = (
+    "You are a creative director at an advertising studio. You are given a PRODUCT "
+    "description. The product photo itself is supplied separately, so DO NOT "
+    "describe the product — describe the advertising SCENE to place it in: the "
+    "setting/surface, lighting, props, mood, and color palette for a premium, "
+    "photorealistic product ad. Keep the product the hero; avoid text, logos, or "
+    "people unless essential.\n"
+    "Output ONLY a JSON object with two keys:\n"
+    '  "prompt": string — the scene/setting description (≤60 words), ending with '
+    '"photorealistic product advertisement"\n'
+    '  "style_tags": array of 5 strings — mood/style keywords for the ad\n'
+    "No extra text, no markdown fences. On retry, incorporate the quality feedback."
 )
 
 _client: anthropic.Anthropic | None = None
@@ -42,8 +58,11 @@ def _get_client() -> anthropic.Anthropic:
 def prompt_engineer(state: GraphState) -> dict:
     is_retry = bool(state.get("quality_feedback"))
     iteration = state.get("iteration", 0) + (1 if is_retry else 0)
+    is_ad = state.get("mode") == "ad"
+    system = SYSTEM_AD if is_ad else SYSTEM_TEXT
 
-    user_content = f"Creative brief: {state['brief']}"
+    label = "Product description" if is_ad else "Creative brief"
+    user_content = f"{label}: {state['brief']}"
     if is_retry:
         user_content += (
             f"\n\nPrevious prompt attempt:\n{state.get('refined_prompt', '')}"
@@ -58,7 +77,7 @@ def prompt_engineer(state: GraphState) -> dict:
             resp = _get_client().messages.create(
                 model=PROMPT_MODEL,
                 max_tokens=512,
-                system=SYSTEM,
+                system=system,
                 messages=[{"role": "user", "content": user_content}],
             )
             break

@@ -58,7 +58,7 @@ async function* parseSSE(response: Response) {
 const PIPELINE: { key: NodeKey; label: string; sub: string; icon: ReactElement }[] = [
   { key: "supervisor", label: "Supervisor", sub: "router", icon: <IconRoute /> },
   { key: "prompt_engineer", label: "Prompt", sub: "Sonnet 4.6", icon: <IconSpark /> },
-  { key: "image_gen", label: "Image", sub: "FLUX dev", icon: <IconImage /> },
+  { key: "image_gen", label: "Image", sub: "SDXL ad / FLUX", icon: <IconImage /> },
   { key: "quality_eval", label: "Quality", sub: "Opus 4.8 vision", icon: <IconScan /> },
   { key: "hitl_gate", label: "Human", sub: "approval", icon: <IconUserCheck /> },
 ];
@@ -80,6 +80,11 @@ export default function Home() {
   const [results, setResults] = useState<IterationResult[]>([]);
   const [errorMsg, setErrorMsg] = useState("");
   const [notice, setNotice] = useState("");
+  // Ad mode (product image → ad) vs text brief
+  const [mode, setMode] = useState<"ad" | "text">("ad");
+  const [productImage, setProductImage] = useState("");
+  const [uploading, setUploading] = useState(false);
+  const [uploadErr, setUploadErr] = useState("");
   // Publish-to-X composer
   const [composerOpen, setComposerOpen] = useState(false);
   const [caption, setCaption] = useState("");
@@ -95,6 +100,7 @@ export default function Home() {
   const threadRef = useRef("");
   const resultsRef = useRef<IterationResult[]>([]);
   const scoreRef = useRef(0);
+  const fileRef = useRef<HTMLInputElement | null>(null);
 
   // Deep link from Slack's "Review in app" button: ?thread=<id> hydrates the
   // paused review state so Approve/Reject work straight from the web.
@@ -242,8 +248,29 @@ export default function Home() {
     }
   }
 
+  async function onUpload(file: File) {
+    setUploading(true);
+    setUploadErr("");
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`${API_URL}/api/upload`, { method: "POST", body: fd });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail ?? `HTTP ${res.status}`);
+      }
+      const d = await res.json();
+      setProductImage(d.url ?? "");
+    } catch (e: unknown) {
+      setUploadErr(e instanceof Error ? e.message : "upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
   async function onGenerate() {
     if (!brief.trim()) return;
+    if (mode === "ad" && !productImage) return;
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
@@ -276,7 +303,11 @@ export default function Home() {
       const res = await fetch(`${API_URL}/api/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ brief }),
+        body: JSON.stringify(
+          mode === "ad"
+            ? { brief, mode: "ad", product_image_url: productImage }
+            : { brief, mode: "text" }
+        ),
         signal: abortRef.current.signal,
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -431,61 +462,140 @@ export default function Home() {
 
       {/* ── Command bar ───────────────────────────────────────────────────────── */}
       <section className="panel animate-fade-up rounded-2xl p-5">
-        <label className="mb-2 block text-[11px] font-medium uppercase tracking-widest text-neutral-500">
-          Creative brief
-        </label>
-        <div className="flex flex-col gap-3 sm:flex-row">
-          <textarea
-            value={brief}
-            onChange={(e) => setBrief(e.target.value)}
-            onKeyDown={(e) => {
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onGenerate();
-            }}
-            placeholder="Describe the content you want… (⌘/Ctrl + Enter to run)"
-            rows={2}
-            className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm outline-none transition placeholder:text-neutral-600 focus:border-violet-500/60"
-            disabled={status === "running"}
-          />
-          <button
-            onClick={onGenerate}
-            disabled={!brief.trim() || status === "running"}
-            className="accent-grad group flex h-[52px] items-center justify-center gap-2 self-stretch rounded-xl px-6 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition hover:brightness-110 disabled:opacity-40 disabled:saturate-50 sm:self-auto"
-          >
-            {status === "running" ? (
-              <>
-                <Spinner /> Generating
-              </>
-            ) : (
-              <>
-                <IconPlay /> Generate
-              </>
-            )}
-          </button>
-        </div>
-
-        <div className="mt-3 flex flex-wrap gap-2">
-          {[
-            "Minimalist ceramic mug on linen, soft daylight product shot",
-            "Luxury skincare bottle on marble with eucalyptus, editorial lighting",
-            "Flat-lay of artisan coffee beans and a moka pot, top-down, warm tones",
-            "Cozy reading nook by a rainy window, warm lamplight, watercolor",
-            "Neon-lit Seoul street at night, cinematic, ultra-detailed",
-            "Bold geometric poster for a summer music festival, vibrant gradients",
-            "Cute mascot logo of a fox barista, flat vector style",
-            "Scandinavian living room, natural light, interior magazine style",
-            "Golden retriever puppy in a field of daisies, photographic, warm sun",
-            "something bold for a streetwear brand",
-          ].map((b) => (
+        {/* mode toggle */}
+        <div className="mb-4 inline-flex rounded-lg border border-[var(--border)] p-0.5 text-xs">
+          {(["ad", "text"] as const).map((m) => (
             <button
-              key={b}
-              onClick={() => setBrief(b)}
+              key={m}
+              onClick={() => setMode(m)}
               disabled={status === "running"}
-              className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-neutral-400 transition hover:border-violet-500/40 hover:text-neutral-200 disabled:opacity-40"
+              className={`rounded-md px-3 py-1.5 font-medium transition ${
+                mode === m
+                  ? "bg-white/10 text-neutral-100"
+                  : "text-neutral-500 hover:text-neutral-300"
+              }`}
             >
-              {b.length > 42 ? b.slice(0, 42) + "…" : b}
+              {m === "ad" ? "📦 Product ad" : "✏️ Text brief"}
             </button>
           ))}
         </div>
+
+        {mode === "ad" ? (
+          <div className="flex flex-col gap-3 sm:flex-row">
+            {/* product upload */}
+            <div className="shrink-0 sm:w-44">
+              <input
+                ref={fileRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) onUpload(f);
+                  e.target.value = "";
+                }}
+              />
+              {productImage ? (
+                <div className="group relative h-44 w-full overflow-hidden rounded-xl border border-[var(--border)]">
+                  <img src={productImage} alt="product" className="h-full w-full object-cover" />
+                  <button
+                    onClick={() => fileRef.current?.click()}
+                    disabled={status === "running"}
+                    className="absolute inset-0 flex items-center justify-center bg-black/60 text-xs font-medium text-white opacity-0 transition group-hover:opacity-100"
+                  >
+                    Replace photo
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => fileRef.current?.click()}
+                  disabled={uploading || status === "running"}
+                  className="flex h-44 w-full flex-col items-center justify-center gap-1.5 rounded-xl border-2 border-dashed border-[var(--border-strong)] text-neutral-500 transition hover:border-violet-500/50 hover:text-neutral-300 disabled:opacity-40"
+                >
+                  {uploading ? <Spinner big /> : <IconUpload />}
+                  <span className="text-xs font-medium">
+                    {uploading ? "Uploading…" : "Upload product photo"}
+                  </span>
+                  <span className="px-3 text-center text-[10px] text-neutral-600">
+                    plain background works best
+                  </span>
+                </button>
+              )}
+              {uploadErr && <p className="mt-1 text-xs text-red-400">{uploadErr}</p>}
+            </div>
+            {/* description + generate */}
+            <div className="flex flex-1 flex-col gap-3">
+              <textarea
+                value={brief}
+                onChange={(e) => setBrief(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onGenerate();
+                }}
+                placeholder="Describe your product — name, material, scent/feel, the vibe you want… (⌘/Ctrl+Enter)"
+                rows={5}
+                className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm outline-none transition placeholder:text-neutral-600 focus:border-violet-500/60"
+                disabled={status === "running"}
+              />
+              <button
+                onClick={onGenerate}
+                disabled={!brief.trim() || !productImage || uploading || status === "running"}
+                className="accent-grad flex h-[44px] items-center justify-center gap-2 rounded-xl px-6 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition hover:brightness-110 disabled:opacity-40 disabled:saturate-50"
+              >
+                {status === "running" ? (
+                  <><Spinner /> Producing ad…</>
+                ) : (
+                  <><IconSpark /> Generate ad</>
+                )}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex flex-col gap-3 sm:flex-row">
+              <textarea
+                value={brief}
+                onChange={(e) => setBrief(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") onGenerate();
+                }}
+                placeholder="Describe the content you want… (⌘/Ctrl + Enter to run)"
+                rows={2}
+                className="flex-1 resize-none rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm outline-none transition placeholder:text-neutral-600 focus:border-violet-500/60"
+                disabled={status === "running"}
+              />
+              <button
+                onClick={onGenerate}
+                disabled={!brief.trim() || status === "running"}
+                className="accent-grad group flex h-[52px] items-center justify-center gap-2 self-stretch rounded-xl px-6 text-sm font-semibold text-white shadow-lg shadow-violet-500/25 transition hover:brightness-110 disabled:opacity-40 disabled:saturate-50 sm:self-auto"
+              >
+                {status === "running" ? (
+                  <><Spinner /> Generating</>
+                ) : (
+                  <><IconPlay /> Generate</>
+                )}
+              </button>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {[
+                "Minimalist ceramic mug on linen, soft daylight product shot",
+                "Luxury skincare bottle on marble with eucalyptus, editorial lighting",
+                "Neon-lit Seoul street at night, cinematic, ultra-detailed",
+                "Cute mascot logo of a fox barista, flat vector style",
+                "Scandinavian living room, natural light, interior magazine style",
+                "something bold for a streetwear brand",
+              ].map((b) => (
+                <button
+                  key={b}
+                  onClick={() => setBrief(b)}
+                  disabled={status === "running"}
+                  className="rounded-full border border-[var(--border)] px-3 py-1 text-xs text-neutral-400 transition hover:border-violet-500/40 hover:text-neutral-200 disabled:opacity-40"
+                >
+                  {b.length > 42 ? b.slice(0, 42) + "…" : b}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
       </section>
 
       {notice && (
@@ -548,7 +658,11 @@ export default function Home() {
                   <Spinner big />
                   <p className="text-xs">
                     {activeNode === "prompt_engineer"
-                      ? "Engineering the prompt…"
+                      ? mode === "ad"
+                        ? "Directing the scene…"
+                        : "Engineering the prompt…"
+                      : mode === "ad"
+                      ? "Staging your product…"
                       : "Rendering image…"}
                   </p>
                 </div>
@@ -859,11 +973,13 @@ function EmptyState() {
         <IconSpark />
       </div>
       <div>
-        <p className="text-sm font-medium text-neutral-200">Enter a brief to start a run</p>
+        <p className="text-sm font-medium text-neutral-200">
+          Upload a product, get an ad-ready post
+        </p>
         <p className="mx-auto mt-1 max-w-md text-xs leading-relaxed text-neutral-500">
-          A supervisor routes your brief through prompt engineering, image generation, and an
-          Opus-vision quality gate — looping until it scores 8/10 or hits the iteration cap, then
-          pausing for your approval.
+          A creative-director agent stages your product into a scene, an Opus-vision quality gate
+          scores it (looping until it&apos;s ad-ready or hits the cap), then it pauses for your
+          approval — and one click ships it to X.
         </p>
       </div>
     </section>
@@ -921,6 +1037,13 @@ function IconPlay() {
   return (
     <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor">
       <path d="M8 5v14l11-7z" />
+    </svg>
+  );
+}
+function IconUpload() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12" />
     </svg>
   );
 }

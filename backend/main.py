@@ -31,7 +31,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langgraph.types import Command
@@ -98,7 +98,9 @@ def _read_runs(limit: int = 50) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 class GenerateRequest(BaseModel):
-    brief: str
+    brief: str  # text brief, or the product description in ad mode
+    mode: str = "text"  # "text" | "ad"
+    product_image_url: str = ""  # uploaded product photo (ad mode)
 
 
 class ApproveRequest(BaseModel):
@@ -265,21 +267,45 @@ def get_session(thread_id: str):
     }
 
 
+@app.post("/api/upload")
+async def upload_product(file: UploadFile = File(...)):
+    """Store an uploaded product photo in R2 and return its public URL (ad mode)."""
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty file")
+    if len(data) > 12 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="image too large (max 12MB)")
+    from tools.r2_tool import upload_bytes
+    url = upload_bytes(
+        data,
+        file.content_type or "image/png",
+        thread_id="uploads",
+        label=str(uuid4())[:8],
+    )
+    if not url:
+        raise HTTPException(status_code=400, detail="R2 storage is not configured")
+    return {"url": url}
+
+
 @app.post("/api/generate")
 async def generate(body: GenerateRequest):
     thread_id = str(uuid4())
     cfg = _make_config(thread_id, body.brief)
+    mode = "ad" if (body.mode == "ad" and body.product_image_url) else "text"
     sessions[thread_id] = {
         "status": "running",
         "config": cfg,
         "brief": body.brief,
+        "mode": mode,
+        "product_image_url": body.product_image_url,
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
 
     async def stream():
         yield _sse({"event": "session", "thread_id": thread_id})
         try:
-            async for evt in _stream_graph(initial_state(body.brief, thread_id), cfg, thread_id):
+            state = initial_state(body.brief, thread_id, mode, body.product_image_url)
+            async for evt in _stream_graph(state, cfg, thread_id):
                 yield evt
         except Exception as exc:
             logger.exception("graph error")

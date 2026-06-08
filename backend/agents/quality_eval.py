@@ -11,7 +11,9 @@ from tools.claude_vision_tool import score_image
 
 
 def quality_eval(state: GraphState) -> dict:
-    result = score_image(state["generated_url"], state["brief"])
+    result = score_image(
+        state["generated_url"], state["brief"], mode=state.get("mode", "text")
+    )
 
     score = result["score"]
     # Combine issues + suggested_fix into the feedback the retry loop acts on.
