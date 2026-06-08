@@ -1,7 +1,7 @@
 """Replicate image-generation wrapper (Pillar 2: tool layer).
 
-Calls Replicate's hosted ByteDance SDXL-Lightning (4-step) — a distilled SDXL
-that renders in ~1-2s, so the live demo (and the retry loop) stays snappy. No
+Calls Replicate's hosted Stability AI SDXL — the full (non-distilled) base+
+refiner model, Stability's workhorse for high-quality 1024px generations. No
 local GPU, runs anywhere. Returns {url, prompt_used, model, latency_ms} and
 retries with exponential backoff on transient API errors. The Replicate client
 reads REPLICATE_API_TOKEN from the environment automatically.
@@ -15,9 +15,8 @@ import replicate
 
 logger = logging.getLogger(__name__)
 
-# Pinned to an exact version hash (SDXL-Lightning is a community model, so a
-# version is required). Distilled to 4 steps with guidance_scale 0.
-IMAGE_MODEL = "bytedance/sdxl-lightning-4step:6f7a773af6fc3e8de9d5a3c00be77c17308914bf67772726aff83496ba1e3bbe"
+# Pinned to an exact version hash (community model, so a version is required).
+IMAGE_MODEL = "stability-ai/sdxl:7762fd07cf82c948538e41f63f77d685e02b063e37e496e96eefd46c929f9bdc"
 MAX_ATTEMPTS = 3
 
 
@@ -46,8 +45,8 @@ def generate_image(prompt: str, style_tags: list[str] | None = None) -> dict:
                     "width": 1024,
                     "height": 1024,
                     "scheduler": "K_EULER",
-                    "num_inference_steps": 4,  # Lightning is distilled to 4 steps
-                    "guidance_scale": 0,       # 0 is recommended for Lightning
+                    "num_inference_steps": 30,  # full SDXL: 25-40 is the sweet spot
+                    "guidance_scale": 7.5,      # standard CFG for SDXL
                     "num_outputs": 1,
                 },
             )
