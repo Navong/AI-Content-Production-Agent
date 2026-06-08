@@ -58,7 +58,7 @@ async function* parseSSE(response: Response) {
 const PIPELINE: { key: NodeKey; label: string; sub: string; icon: ReactElement }[] = [
   { key: "supervisor", label: "Supervisor", sub: "router", icon: <IconRoute /> },
   { key: "prompt_engineer", label: "Prompt", sub: "Sonnet 4.6", icon: <IconSpark /> },
-  { key: "image_gen", label: "Image", sub: "SDXL ad / FLUX", icon: <IconImage /> },
+  { key: "image_gen", label: "Image", sub: "FLUX Kontext", icon: <IconImage /> },
   { key: "quality_eval", label: "Quality", sub: "Opus 4.8 vision", icon: <IconScan /> },
   { key: "hitl_gate", label: "Human", sub: "approval", icon: <IconUserCheck /> },
 ];
