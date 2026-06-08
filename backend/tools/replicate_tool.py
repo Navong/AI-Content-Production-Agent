@@ -19,41 +19,10 @@ logger = logging.getLogger(__name__)
 IMAGE_MODEL = "black-forest-labs/flux-schnell"
 # Product-ad model: FLUX Kontext (Pruna-accelerated) — instruction-based image
 # editing that restages the product into a new scene while preserving the
-# product itself. ~5s/image and more faithful than inpaint compositing.
+# product itself. Re-renders at high quality, so it also serves as the
+# enhancement step (no separate upscaler needed). ~5s/image.
 AD_MODEL = "prunaai/flux-kontext-fast:6efb57153457f8c51fb813c6d15f45d896f1916dd7d732af49d6a4b09488e2a6"
-# Faithful enhancer for the uploaded product photo (upscale + detail/HDR) — low
-# creativity + high resemblance keep the product itself unchanged.
-ENHANCE_MODEL = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e"
 MAX_ATTEMPTS = 3
-
-
-def enhance_image(image_url: str) -> str:
-    """Upscale + enhance a product photo, staying faithful to the original.
-
-    Returns the enhanced image URL, or the original URL on any failure (so a
-    flaky enhancer never blocks ad production).
-    """
-    try:
-        start = time.monotonic()
-        out = replicate.run(
-            ENHANCE_MODEL,
-            input={
-                "image": image_url,
-                "scale_factor": 2,
-                "creativity": 0.2,   # low → minimal hallucination
-                "resemblance": 1.0,  # high → stay true to the product
-                "dynamic": 6,
-                "sharpen": 1,
-                "num_inference_steps": 18,
-                "output_format": "png",
-            },
-        )
-        url = _extract_url(out)
-        logger.info("enhance ok (%dms): %s", int((time.monotonic() - start) * 1000), url)
-        return url or image_url
-    except Exception as e:  # noqa: BLE001
-        logger.warning("enhance failed, using original product image: %s", e)
-        return image_url
 
 
 def _extract_url(output) -> str:
@@ -70,8 +39,10 @@ def generate_ad(product_image_url: str, scene_prompt: str) -> dict:
     unchanged" instruction. Returns {url, prompt_used, model, latency_ms}.
     """
     instruction = (
-        "Place the product into this setting, keeping the product itself exactly "
-        f"as shown and unchanged. {scene_prompt}"
+        "Place the product into this setting. Keep the product's exact shape, "
+        "color and design from the source image, and do NOT add or alter any "
+        "text, label, or logo. Render the whole scene in crisp, high-resolution, "
+        f"professional product-photography quality with clean lighting. {scene_prompt}"
     )
     last_err: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
