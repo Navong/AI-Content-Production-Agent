@@ -15,17 +15,23 @@ iterations_used, final_score) on every run for the observability pillar.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
+import hmac
 import json
 import logging
+import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import parse_qs
 from uuid import uuid4
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from langgraph.types import Command
@@ -37,6 +43,8 @@ from state import initial_state
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
 
 app = FastAPI(title="AI Content Production Agent")
 app.add_middleware(
@@ -101,6 +109,16 @@ class ApproveRequest(BaseModel):
     # last one the agent generated). Overrides what the approved card shows.
     image: str = ""
     score: int | None = None
+
+
+class CaptionRequest(BaseModel):
+    thread_id: str
+
+
+class PublishRequest(BaseModel):
+    thread_id: str
+    image: str = ""
+    caption: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -214,6 +232,13 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/api/config")
+def api_config():
+    """Feature flags the studio reads on load (e.g. show 'Post to X' only when configured)."""
+    from tools.x_tool import x_configured
+    return {"x_enabled": x_configured()}
+
+
 @app.get("/api/runs")
 def get_runs(limit: int = 50):
     return _read_runs(limit)
@@ -296,13 +321,138 @@ async def approve(body: ApproveRequest):
 
 
 # ---------------------------------------------------------------------------
-# Slack callback (notify-only)
+# Publish to X (Pillar 2: another tool — distribution)
 # ---------------------------------------------------------------------------
-# Slack is notify-only: the review card carries a single "Review in app" URL
-# button (no approve/reject in Slack). Slack still POSTs an interaction payload
-# for URL buttons when Interactivity is enabled, so this endpoint just ACKs with
-# 200 and does nothing. Approval happens in the web studio via /api/approve.
+
+def _publish_to_x(thread_id: str, image: str = "", caption: str = "") -> dict:
+    """Post the approved image + caption to X; idempotent per run.
+
+    Falls back to the paused image and a Claude-generated caption when those
+    aren't supplied. Records the tweet URL on the session and (best-effort)
+    updates the Slack card.
+    """
+    from tools.x_tool import generate_caption, post_tweet
+
+    s = sessions.get(thread_id, {})
+    if s.get("published_url"):
+        return {"url": s["published_url"], "tweet_id": "", "already": True}
+
+    img = image or s.get("image_at_pause", "")
+    cap = caption or generate_caption(s.get("brief", ""))
+    result = post_tweet(img, cap)
+
+    s["published_url"] = result["url"]
+    s["published_caption"] = cap
+    try:
+        from tools.slack_tool import mark_posted_to_x
+        mark_posted_to_x(thread_id, result["url"])
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Slack posted-update failed (non-fatal): %s", e)
+    return result
+
+
+@app.post("/api/caption")
+def api_caption(body: CaptionRequest):
+    """Return a Claude-generated tweet caption for this run's brief."""
+    s = sessions.get(body.thread_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="session not found")
+    from tools.x_tool import generate_caption
+    return {"caption": generate_caption(s.get("brief", ""))}
+
+
+@app.post("/api/publish")
+def api_publish(body: PublishRequest):
+    """Post the approved image + caption to X. Returns {url}."""
+    s = sessions.get(body.thread_id)
+    if not s:
+        raise HTTPException(status_code=404, detail="session not found")
+    from tools.x_tool import x_configured
+    if not x_configured():
+        raise HTTPException(status_code=400, detail="X is not configured on the server")
+    try:
+        return _publish_to_x(body.thread_id, body.image, body.caption)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("publish error")
+        raise HTTPException(status_code=502, detail=f"X post failed: {exc}")
+
+
+# ---------------------------------------------------------------------------
+# Slack interactivity — only the "Post to X" button does work (Pillar 4 + 2)
+# ---------------------------------------------------------------------------
+
+def _verify_slack_signature(headers, body: bytes) -> bool:
+    """Validate Slack's v0 request signature (HMAC-SHA256 over the raw body)."""
+    if not SLACK_SIGNING_SECRET:
+        logger.warning("SLACK_SIGNING_SECRET not set — rejecting Slack action")
+        return False
+    ts = headers.get("x-slack-request-timestamp", "")
+    sig = headers.get("x-slack-signature", "")
+    if not ts or not sig:
+        return False
+    try:
+        if abs(time.time() - int(ts)) > 60 * 5:
+            return False
+    except ValueError:
+        return False
+    base = f"v0:{ts}:{body.decode('utf-8')}".encode("utf-8")
+    digest = "v0=" + hmac.new(SLACK_SIGNING_SECRET.encode("utf-8"), base, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(digest, sig)
+
+
+async def _slack_post_to_x(thread_id: str, response_url: str, user: str) -> None:
+    """Background: publish to X for a Slack 'Post to X' click, then report."""
+    import requests as _rq
+    try:
+        result = await asyncio.to_thread(_publish_to_x, thread_id)
+        text = f"🐦 Posted to X by @{user} — {result['url']}"
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Slack post-to-x error")
+        text = f"⚠️ Couldn't post to X: {exc}"
+    try:
+        _rq.post(response_url, json={"text": text, "replace_original": False}, timeout=10)
+    except Exception:  # noqa: BLE001
+        pass
+
 
 @app.post("/slack/actions")
-async def slack_actions():
-    return JSONResponse({})
+async def slack_actions(request: Request):
+    """Handle Block Kit button clicks.
+
+    Only "post_to_x" does work (verified via signature → publish in background).
+    URL buttons (open_app / download / view_in_studio) just ACK with 200.
+    """
+    raw = await request.body()
+    form = parse_qs(raw.decode("utf-8"))
+    payload_raw = form.get("payload", [None])[0]
+    if not payload_raw:
+        return JSONResponse({})  # not an interaction we handle
+
+    if not _verify_slack_signature(request.headers, raw):
+        raise HTTPException(status_code=403, detail="invalid Slack signature")
+
+    payload = json.loads(payload_raw)
+    actions = payload.get("actions") or []
+    if not actions:
+        return JSONResponse({})
+    action_id = actions[0].get("action_id", "")
+    thread_id = actions[0].get("value", "")
+    response_url = payload.get("response_url", "")
+    user = (payload.get("user") or {}).get("username", "someone")
+
+    if action_id != "post_to_x":
+        return JSONResponse({})  # URL buttons — nothing to do
+
+    if thread_id not in sessions:
+        return JSONResponse(
+            {"replace_original": False, "text": "⚠️ This run is no longer available."}
+        )
+
+    from tools.x_tool import x_configured
+    if not x_configured():
+        return JSONResponse(
+            {"replace_original": False, "text": "⚠️ X publishing isn't configured on the server."}
+        )
+
+    asyncio.create_task(_slack_post_to_x(thread_id, response_url, user))
+    return JSONResponse({"replace_original": False, "text": f"🐦 Posting to X… (requested by @{user})"})

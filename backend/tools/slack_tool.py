@@ -27,6 +27,8 @@ APP_URL = os.getenv("APP_URL", "http://localhost:3000")
 
 # thread_id -> Slack message ts, so a studio decision can update the right card.
 _ts_by_thread: dict[str, str] = {}
+# thread_id -> last approved-card context, so "Posted to X" can rebuild the card.
+_card_ctx: dict[str, dict] = {}
 
 
 def _score_badge(score: int) -> str:
@@ -106,65 +108,61 @@ def send_approval_request(
     raise RuntimeError("no Slack destination configured (SLACK_BOT_TOKEN+SLACK_CHANNEL or SLACK_WEBHOOK_URL)")
 
 
-def update_on_decision(
-    thread_id: str, status: str, image_url: str, score: int, brief: str, reviewer: str
-) -> bool:
-    """Replace the review card with the decision result (bot token only).
+def _x_enabled() -> bool:
+    try:
+        from tools.x_tool import x_configured
+        return x_configured()
+    except Exception:  # noqa: BLE001
+        return False
 
-    On approve the card becomes "✅ Approved by … " + a Download image button;
-    on reject it becomes a short "❌ Rejected by …". No-op (returns False) when
-    posting via webhook, or if we never captured this run's message ts.
-    """
+
+def _approved_blocks(
+    thread_id: str, image_url: str, score: int, brief: str, reviewer: str, tweet_url: str = ""
+) -> list:
+    """Approved result card. Adds 'Posted to X' state when tweet_url is set."""
+    headline = f"✅ *Approved by {reviewer}*  ·  {_score_badge(score)}\n_{brief}_"
+    if tweet_url:
+        headline += "\n🐦 *Posted to X*"
+    elements = [
+        {
+            "type": "button",
+            "action_id": "download",
+            "text": {"type": "plain_text", "text": "⬇️  Download image"},
+            "style": "primary",
+            "url": image_url,
+        },
+        {
+            "type": "button",
+            "action_id": "view_in_studio",
+            "text": {"type": "plain_text", "text": "View in studio ↗"},
+            "url": f"{APP_URL.rstrip('/')}/?thread={thread_id}",
+        },
+    ]
+    if tweet_url:
+        elements.append({
+            "type": "button",
+            "action_id": "view_tweet",
+            "text": {"type": "plain_text", "text": "View tweet ↗"},
+            "url": tweet_url,
+        })
+    elif _x_enabled():
+        elements.append({
+            "type": "button",
+            "action_id": "post_to_x",
+            "text": {"type": "plain_text", "text": "🐦  Post to X"},
+            "value": thread_id,
+        })
+    return [
+        {"type": "section", "text": {"type": "mrkdwn", "text": headline}},
+        {"type": "image", "image_url": image_url, "alt_text": "approved image"},
+        {"type": "actions", "elements": elements},
+    ]
+
+
+def _chat_update(thread_id: str, blocks: list, fallback: str) -> bool:
     ts = _ts_by_thread.get(thread_id)
     if not (SLACK_BOT_TOKEN and SLACK_CHANNEL and ts):
         return False
-
-    if status == "approved":
-        blocks = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"✅ *Approved by {reviewer}*  ·  {_score_badge(score)}\n_{brief}_",
-                },
-            },
-            {"type": "image", "image_url": image_url, "alt_text": "approved image"},
-            {
-                "type": "actions",
-                "elements": [
-                    {
-                        "type": "button",
-                        "action_id": "download",
-                        "text": {"type": "plain_text", "text": "⬇️  Download image"},
-                        "style": "primary",
-                        "url": image_url,
-                    },
-                    {
-                        "type": "button",
-                        "action_id": "view_in_studio",
-                        "text": {"type": "plain_text", "text": "View in studio ↗"},
-                        "url": f"{APP_URL.rstrip('/')}/?thread={thread_id}",
-                    },
-                ],
-            },
-        ]
-        fallback = f"Approved by {reviewer}"
-    else:
-        label = {
-            "rejected": "❌ *Rejected*",
-            "regenerated": "🔁 *Regenerated*",
-        }.get(status, f"*{status}*")
-        blocks = [
-            {
-                "type": "section",
-                "text": {
-                    "type": "mrkdwn",
-                    "text": f"{label} by {reviewer}  ·  {_score_badge(score)}\n_{brief}_",
-                },
-            }
-        ]
-        fallback = f"{status} by {reviewer}"
-
     resp = requests.post(
         "https://slack.com/api/chat.update",
         headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
@@ -175,5 +173,47 @@ def update_on_decision(
     if not data.get("ok"):
         logger.warning("slack chat.update failed: %s", data.get("error"))
         return False
-    _ts_by_thread.pop(thread_id, None)
     return True
+
+
+def update_on_decision(
+    thread_id: str, status: str, image_url: str, score: int, brief: str, reviewer: str
+) -> bool:
+    """Replace the review card with the decision result (bot token only).
+
+    Approve → "✅ Approved by … " + Download / View in studio / Post to X.
+    Reject/regenerate → a short status line. No-op when on webhook or no ts.
+    """
+    if not (SLACK_BOT_TOKEN and SLACK_CHANNEL and _ts_by_thread.get(thread_id)):
+        return False
+
+    if status == "approved":
+        _card_ctx[thread_id] = {
+            "image": image_url, "score": score, "brief": brief, "reviewer": reviewer,
+        }
+        blocks = _approved_blocks(thread_id, image_url, score, brief, reviewer)
+        return _chat_update(thread_id, blocks, f"Approved by {reviewer}")
+
+    label = {"rejected": "❌ *Rejected*", "regenerated": "🔁 *Regenerated*"}.get(
+        status, f"*{status}*"
+    )
+    blocks = [
+        {
+            "type": "section",
+            "text": {"type": "mrkdwn", "text": f"{label} by {reviewer}  ·  {_score_badge(score)}\n_{brief}_"},
+        }
+    ]
+    ok = _chat_update(thread_id, blocks, f"{status} by {reviewer}")
+    _ts_by_thread.pop(thread_id, None)  # terminal, won't be updated again
+    return ok
+
+
+def mark_posted_to_x(thread_id: str, tweet_url: str) -> bool:
+    """Rebuild the approved card to show 'Posted to X' + a View tweet button."""
+    ctx = _card_ctx.get(thread_id)
+    if not ctx:
+        return False
+    blocks = _approved_blocks(
+        thread_id, ctx["image"], ctx["score"], ctx["brief"], ctx["reviewer"], tweet_url
+    )
+    return _chat_update(thread_id, blocks, f"Posted to X — {tweet_url}")
