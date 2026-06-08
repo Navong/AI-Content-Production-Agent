@@ -138,7 +138,13 @@ def update_on_decision(
                         "text": {"type": "plain_text", "text": "⬇️  Download image"},
                         "style": "primary",
                         "url": image_url,
-                    }
+                    },
+                    {
+                        "type": "button",
+                        "action_id": "view_in_studio",
+                        "text": {"type": "plain_text", "text": "View in studio ↗"},
+                        "url": f"{APP_URL.rstrip('/')}/?thread={thread_id}",
+                    },
                 ],
             },
         ]
