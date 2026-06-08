@@ -37,8 +37,10 @@ SYSTEM = (
     "You are a meticulous creative director at a generative-AI content studio. "
     "Score the image strictly against the brief on a 1-10 scale, where 8 or above "
     "means client-ready. Judge composition, adherence to the brief and style, and "
-    "technical quality (anatomy, artifacts, stray text). Be specific and honest — "
-    "do not inflate scores. `suggested_fix` should be a concrete prompt change."
+    "technical quality (anatomy, artifacts). Be specific and honest — do not "
+    "inflate scores. Do NOT judge or penalize any text, words, or labels rendered "
+    "in the image — text rendering is a known model limitation and is out of scope; "
+    "ignore it entirely. `suggested_fix` should be a concrete prompt change."
 )
 
 SYSTEM_AD = (
@@ -48,8 +50,12 @@ SYSTEM_AD = (
     "visible, undistorted, and faithful to the described product; (2) the scene "
     "looks like a premium, realistic ad (lighting, shadows, and the product sit "
     "naturally together — no obvious cut-out/floating look); (3) commercial appeal "
-    "and on-brand mood; (4) no artifacts, stray text, or warped edges. Be honest "
-    "and specific. `suggested_fix` should be a concrete change to the scene prompt."
+    "and on-brand mood; (4) no major artifacts or warped edges. "
+    "IMPORTANT: completely ignore any text, words, labels, or typography on the "
+    "product or in the scene — do NOT judge or lower the score because of text "
+    "(legible or garbled). Text rendering is a known limitation and is out of "
+    "scope for this score. Be honest and specific. `suggested_fix` should be a "
+    "concrete change to the scene prompt (never about text)."
 )
 
 _client: anthropic.Anthropic | None = None
