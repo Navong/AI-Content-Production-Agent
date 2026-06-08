@@ -15,6 +15,7 @@ class GraphState(TypedDict):
     mode: str                                   # "ad" (product image → ad) | "text" (brief → image)
     brief: str                                  # text brief, or the product description in ad mode
     product_image_url: str                      # uploaded product photo (ad mode only)
+    enhanced_product_url: str                   # upscaled/enhanced product photo (cached once)
     refined_prompt: str                         # after PromptEngineer / Creative Director
     style_tags: list[str]                       # extracted style keywords
     generated_url: str                          # image URL from Replicate
@@ -34,6 +35,7 @@ def initial_state(
         "mode": mode,
         "brief": brief,
         "product_image_url": product_image_url,
+        "enhanced_product_url": "",
         "refined_prompt": "",
         "style_tags": [],
         "generated_url": "",

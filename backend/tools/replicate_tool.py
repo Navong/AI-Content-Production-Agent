@@ -20,7 +20,39 @@ IMAGE_MODEL = "black-forest-labs/flux-schnell"
 # Product-ad model: places a real product image into a generated scene with
 # ControlNet conditioning + apply_img re-compositing for product fidelity.
 AD_MODEL = "catacolabs/sdxl-ad-inpaint:9c0cb4c579c54432431d96c70924afcca18983de872e8a221777fb1416253359"
+# Faithful enhancer for the uploaded product photo (upscale + detail/HDR) — low
+# creativity + high resemblance keep the product itself unchanged.
+ENHANCE_MODEL = "philz1337x/clarity-upscaler:dfad41707589d68ecdccd1dfa600d55a208f9310748e44bfe35b4a6291453d5e"
 MAX_ATTEMPTS = 3
+
+
+def enhance_image(image_url: str) -> str:
+    """Upscale + enhance a product photo, staying faithful to the original.
+
+    Returns the enhanced image URL, or the original URL on any failure (so a
+    flaky enhancer never blocks ad production).
+    """
+    try:
+        start = time.monotonic()
+        out = replicate.run(
+            ENHANCE_MODEL,
+            input={
+                "image": image_url,
+                "scale_factor": 2,
+                "creativity": 0.2,   # low → minimal hallucination
+                "resemblance": 1.0,  # high → stay true to the product
+                "dynamic": 6,
+                "sharpen": 1,
+                "num_inference_steps": 18,
+                "output_format": "png",
+            },
+        )
+        url = _extract_url(out)
+        logger.info("enhance ok (%dms): %s", int((time.monotonic() - start) * 1000), url)
+        return url or image_url
+    except Exception as e:  # noqa: BLE001
+        logger.warning("enhance failed, using original product image: %s", e)
+        return image_url
 
 
 def _extract_url(output) -> str:

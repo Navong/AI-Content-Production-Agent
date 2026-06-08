@@ -13,16 +13,23 @@ from datetime import datetime, timezone
 
 from state import GraphState
 from tools.r2_tool import upload_image
-from tools.replicate_tool import generate_ad, generate_image
+from tools.replicate_tool import enhance_image, generate_ad, generate_image
 
 
 def image_gen(state: GraphState) -> dict:
     thread_id = state.get("thread_id", "unknown")
     iteration = state.get("iteration", 0)
+    extra: dict = {}
 
     if state.get("mode") == "ad" and state.get("product_image_url"):
-        # Stage the uploaded product into an advertising scene.
-        result = generate_ad(state["product_image_url"], state["refined_prompt"])
+        # Enhance the uploaded product photo once (upscale + sharpen, faithful),
+        # cache it, then stage that high-quality product into an ad scene.
+        enhanced = state.get("enhanced_product_url")
+        if not enhanced:
+            enhanced = enhance_image(state["product_image_url"])
+            extra["enhanced_product_url"] = enhanced
+            print(f"[image_gen] enhanced product photo -> {enhanced}")
+        result = generate_ad(enhanced, state["refined_prompt"])
     else:
         result = generate_image(state["refined_prompt"], state.get("style_tags"))
     replicate_url = result["url"]
@@ -43,4 +50,4 @@ def image_gen(state: GraphState) -> dict:
         f"[image_gen] iteration {iteration}: "
         f"{result['model']} in {result['latency_ms']}ms -> {permanent_url}"
     )
-    return {"generated_url": permanent_url, "history": [entry]}
+    return {"generated_url": permanent_url, "history": [entry], **extra}
