@@ -338,9 +338,15 @@ export default function Home() {
 
         <div className="mt-3 flex flex-wrap gap-2">
           {[
-            "Cozy reading nook by a rainy window, warm lamplight, watercolor",
             "Minimalist ceramic mug on linen, soft daylight product shot",
+            "Luxury skincare bottle on marble with eucalyptus, editorial lighting",
+            "Flat-lay of artisan coffee beans and a moka pot, top-down, warm tones",
+            "Cozy reading nook by a rainy window, warm lamplight, watercolor",
             "Neon-lit Seoul street at night, cinematic, ultra-detailed",
+            "Bold geometric poster for a summer music festival, vibrant gradients",
+            "Cute mascot logo of a fox barista, flat vector style",
+            "Scandinavian living room, natural light, interior magazine style",
+            "Golden retriever puppy in a field of daisies, photographic, warm sun",
             "something bold for a streetwear brand",
           ].map((b) => (
             <button
