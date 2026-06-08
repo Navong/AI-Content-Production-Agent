@@ -85,10 +85,9 @@ export default function Home() {
   const [caption, setCaption] = useState("");
   const [captionLoading, setCaptionLoading] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const [postUrl, setPostUrl] = useState("");
+  const [tweetUrl, setTweetUrl] = useState("");
   const [publishErr, setPublishErr] = useState("");
-  const [publishEnabled, setPublishEnabled] = useState(false);
-  const [platform, setPlatform] = useState("Facebook");
+  const [xEnabled, setXEnabled] = useState(false);
 
   const abortRef = useRef<AbortController | null>(null);
   const iterRef = useRef(0);
@@ -133,15 +132,11 @@ export default function Home() {
     })();
   }, []);
 
-  // Feature flags (whether publishing is configured server-side, and where to).
+  // Feature flags (e.g. whether "Post to X" is configured server-side).
   useEffect(() => {
     fetch(`${API_URL}/api/config`)
       .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (!d) return;
-        setPublishEnabled(!!d.publish_enabled);
-        if (d.platform) setPlatform(d.platform);
-      })
+      .then((d) => d && setXEnabled(!!d.x_enabled))
       .catch(() => {});
   }, []);
 
@@ -272,7 +267,7 @@ export default function Home() {
     setNotice("");
     setComposerOpen(false);
     setCaption("");
-    setPostUrl("");
+    setTweetUrl("");
     setPublishErr("");
     iterRef.current = 0;
     imageRef.current = "";
@@ -380,7 +375,7 @@ export default function Home() {
         throw new Error(d.detail ?? `HTTP ${res.status}`);
       }
       const d = await res.json();
-      setPostUrl(d.url ?? "");
+      setTweetUrl(d.url ?? "");
       setComposerOpen(false);
     } catch (e: unknown) {
       setPublishErr(e instanceof Error ? e.message : "Failed to post");
@@ -643,41 +638,45 @@ export default function Home() {
               </div>
             )}
 
-            {/* Publish to Facebook */}
-            {status === "approved" && publishEnabled && (
+            {/* Publish to X */}
+            {status === "approved" && xEnabled && (
               <div className="panel animate-fade-up rounded-2xl p-5">
-                {postUrl ? (
+                {tweetUrl ? (
                   <a
-                    href={postUrl}
+                    href={tweetUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="flex items-center gap-2 text-sm font-medium text-blue-300 hover:text-blue-200"
+                    className="flex items-center gap-2 text-sm font-medium text-sky-300 hover:text-sky-200"
                   >
-                    📘 Posted to {platform} — View post ↗
+                    🐦 Posted to X — View tweet ↗
                   </a>
                 ) : composerOpen ? (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between">
                       <p className="text-[11px] font-medium uppercase tracking-widest text-neutral-500">
-                        Compose {platform} post
+                        Compose tweet
                       </p>
-                      <span className="text-xs text-neutral-600">{caption.length} chars</span>
+                      <span
+                        className={`text-xs ${caption.length > 280 ? "text-red-400" : "text-neutral-600"}`}
+                      >
+                        {caption.length}/280
+                      </span>
                     </div>
                     <textarea
                       value={caption}
                       onChange={(e) => setCaption(e.target.value)}
                       rows={3}
-                      placeholder={captionLoading ? "Writing a caption…" : "What should the post say?"}
-                      className="w-full resize-none rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm outline-none transition placeholder:text-neutral-600 focus:border-blue-500/60"
+                      placeholder={captionLoading ? "Writing a caption…" : "What should the tweet say?"}
+                      className="w-full resize-none rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm outline-none transition placeholder:text-neutral-600 focus:border-sky-500/60"
                     />
                     {publishErr && <p className="text-xs text-red-400">{publishErr}</p>}
                     <div className="flex gap-2">
                       <button
                         onClick={publish}
-                        disabled={publishing || !caption.trim()}
-                        className="flex items-center gap-1.5 rounded-xl bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-blue-500 disabled:opacity-40"
+                        disabled={publishing || !caption.trim() || caption.length > 280}
+                        className="flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:opacity-40"
                       >
-                        {publishing ? <Spinner /> : "📘"} Publish to {platform}
+                        {publishing ? <Spinner /> : "🐦"} Publish to X
                       </button>
                       <button
                         onClick={() => setComposerOpen(false)}
@@ -690,9 +689,9 @@ export default function Home() {
                 ) : (
                   <button
                     onClick={openComposer}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-blue-500/30 bg-blue-500/10 py-2.5 text-sm font-medium text-blue-300 transition hover:bg-blue-500/20"
+                    className="flex w-full items-center justify-center gap-2 rounded-xl border border-sky-500/30 bg-sky-500/10 py-2.5 text-sm font-medium text-sky-300 transition hover:bg-sky-500/20"
                   >
-                    📘 Post to {platform}
+                    🐦 Post to X
                   </button>
                 )}
               </div>

@@ -108,10 +108,10 @@ def send_approval_request(
     raise RuntimeError("no Slack destination configured (SLACK_BOT_TOKEN+SLACK_CHANNEL or SLACK_WEBHOOK_URL)")
 
 
-def _publish_enabled() -> bool:
+def _x_enabled() -> bool:
     try:
-        from tools.publish_tool import publish_configured
-        return publish_configured()
+        from tools.x_tool import x_configured
+        return x_configured()
     except Exception:  # noqa: BLE001
         return False
 
@@ -122,7 +122,7 @@ def _approved_blocks(
     """Approved result card. Adds 'Posted to X' state when tweet_url is set."""
     headline = f"✅ *Approved by {reviewer}*  ·  {_score_badge(score)}\n_{brief}_"
     if tweet_url:
-        headline += "\n📘 *Posted to Facebook*"
+        headline += "\n🐦 *Posted to X*"
     elements = [
         {
             "type": "button",
@@ -141,15 +141,15 @@ def _approved_blocks(
     if tweet_url:
         elements.append({
             "type": "button",
-            "action_id": "view_post",
-            "text": {"type": "plain_text", "text": "View post ↗"},
+            "action_id": "view_tweet",
+            "text": {"type": "plain_text", "text": "View tweet ↗"},
             "url": tweet_url,
         })
-    elif _publish_enabled():
+    elif _x_enabled():
         elements.append({
             "type": "button",
-            "action_id": "publish",
-            "text": {"type": "plain_text", "text": "📘  Post to Facebook"},
+            "action_id": "post_to_x",
+            "text": {"type": "plain_text", "text": "🐦  Post to X"},
             "value": thread_id,
         })
     return [
@@ -208,12 +208,12 @@ def update_on_decision(
     return ok
 
 
-def mark_published(thread_id: str, post_url: str) -> bool:
-    """Rebuild the approved card to show 'Posted to Facebook' + a View post button."""
+def mark_posted_to_x(thread_id: str, tweet_url: str) -> bool:
+    """Rebuild the approved card to show 'Posted to X' + a View tweet button."""
     ctx = _card_ctx.get(thread_id)
     if not ctx:
         return False
     blocks = _approved_blocks(
-        thread_id, ctx["image"], ctx["score"], ctx["brief"], ctx["reviewer"], post_url
+        thread_id, ctx["image"], ctx["score"], ctx["brief"], ctx["reviewer"], tweet_url
     )
-    return _chat_update(thread_id, blocks, f"Posted to Facebook — {post_url}")
+    return _chat_update(thread_id, blocks, f"Posted to X — {tweet_url}")
