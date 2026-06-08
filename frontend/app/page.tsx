@@ -231,6 +231,15 @@ export default function Home() {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
 
+    // A new generation is always a NEW thread — fully detach from any
+    // deep-linked run (?thread=…) so the old thread/URL can't leak in.
+    threadRef.current = "";
+    resultsRef.current = [];
+    scoreRef.current = 0;
+    if (typeof window !== "undefined" && window.location.search) {
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+
     setStatus("running");
     setActiveNode("prompt_engineer");
     setIteration(0);
@@ -239,6 +248,7 @@ export default function Home() {
     setFeedback("");
     setResults([]);
     setErrorMsg("");
+    setNotice("");
     iterRef.current = 0;
     imageRef.current = "";
 
