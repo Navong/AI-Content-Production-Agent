@@ -21,6 +21,15 @@ from state import GraphState
 PROMPT_MODEL = "claude-sonnet-4-6"
 MAX_ATTEMPTS = 3
 
+# Ad mode generates one ad per style direction (distinct looks for the human to
+# pick from), instead of a retry-until-good loop.
+AD_STYLES = [
+    "bright minimalist studio — clean seamless background, soft even lighting, generous negative space",
+    "luxury and moody — dramatic directional lighting, deep rich tones, premium surfaces (marble, velvet, dark wood)",
+    "natural lifestyle — the product in a real in-use setting with warm daylight and everyday props",
+    "bold and vibrant — energetic saturated colors, playful modern composition, eye-catching",
+]
+
 SYSTEM_TEXT = (
     "You are an expert prompt engineer for SDXL image models. "
     "Convert user creative briefs into precise, detailed generation prompts. "
@@ -61,15 +70,24 @@ def prompt_engineer(state: GraphState) -> dict:
     is_ad = state.get("mode") == "ad"
     system = SYSTEM_AD if is_ad else SYSTEM_TEXT
 
-    label = "Product description" if is_ad else "Creative brief"
-    user_content = f"{label}: {state['brief']}"
-    if is_retry:
-        user_content += (
-            f"\n\nPrevious prompt attempt:\n{state.get('refined_prompt', '')}"
-            f"\n\nQuality score: {state.get('quality_score', 0)}/10"
-            f"\n\nCritique / suggested fix:\n{state['quality_feedback']}"
-            f"\n\nRevise the prompt to directly address the critique."
+    if is_ad:
+        # Ad mode produces a set of distinct STYLE variations (no retry loop);
+        # each iteration takes the next style direction so the human can pick.
+        style = AD_STYLES[iteration % len(AD_STYLES)]
+        user_content = (
+            f"Product description: {state['brief']}\n\n"
+            f"Design the ad scene in THIS style direction: {style}\n"
+            "Keep the product the hero and make the scene visually distinct from other styles."
         )
+    else:
+        user_content = f"Creative brief: {state['brief']}"
+        if is_retry:
+            user_content += (
+                f"\n\nPrevious prompt attempt:\n{state.get('refined_prompt', '')}"
+                f"\n\nQuality score: {state.get('quality_score', 0)}/10"
+                f"\n\nCritique / suggested fix:\n{state['quality_feedback']}"
+                f"\n\nRevise the prompt to directly address the critique."
+            )
 
     last_err: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):

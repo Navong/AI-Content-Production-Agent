@@ -618,7 +618,7 @@ export default function Home() {
           </h2>
           {iteration > 0 && (
             <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-300">
-              ↻ retry · iteration {iteration}
+              {mode === "ad" ? `✨ variation ${iteration + 1} of 4` : `↻ retry · iteration ${iteration}`}
             </span>
           )}
         </div>
@@ -811,11 +811,11 @@ export default function Home() {
               </div>
             )}
 
-            {/* Iterations filmstrip */}
+            {/* Iterations / variations filmstrip */}
             {results.length > 1 && (
               <div className="panel rounded-2xl p-5">
                 <p className="mb-3 text-[11px] font-medium uppercase tracking-widest text-neutral-500">
-                  Iterations
+                  {mode === "ad" ? "Variations — pick your favorite" : "Iterations"}
                 </p>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {results.map((r) => (

@@ -11,6 +11,7 @@ from state import GraphState
 
 QUALITY_THRESHOLD = 8
 MAX_ITERATIONS = 3
+AD_VARIATIONS = 4  # ad mode: how many distinct styles to produce for the human
 
 
 def supervisor(state: GraphState) -> dict:
@@ -27,6 +28,15 @@ def route(state: GraphState) -> str:
         return "image_gen"
     if state.get("quality_score", 0) == 0:
         return "quality_eval"
+
+    # Ad mode: produce a fixed set of distinct style variations, then let the
+    # human pick — no retry-on-score (the ad model reliably scores well).
+    if state.get("mode") == "ad":
+        if state.get("iteration", 0) < AD_VARIATIONS - 1:
+            return "prompt_engineer"  # next style
+        return "hitl_gate"
+
+    # Text mode: retry-until-good.
     if state["quality_score"] >= QUALITY_THRESHOLD:
         return "hitl_gate"
     if state.get("iteration", 0) < MAX_ITERATIONS:
