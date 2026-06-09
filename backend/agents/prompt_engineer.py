@@ -58,30 +58,23 @@ SYSTEM_TEXT = (
 )
 
 SYSTEM_AD = (
-    "You are a creative director at a top advertising studio creating a premium "
-    "product ad. The product photo is supplied separately, so DO NOT describe the "
-    "product itself — describe the advertising SCENE around it.\n"
-    "STEP 1 — Understand the product. Infer its category, its KEY INGREDIENT or "
-    "hero feature, and the benefit it promises. If the description is not in "
-    "English (e.g. Korean), translate it to English first.\n"
-    "STEP 2 — Design a rich, on-concept scene that SELLS the product:\n"
-    "• Visualize the hero ingredient/feature as elegant props or effects AROUND "
-    "the product — e.g. rice toner → scattered rice grains + milky splashes; "
-    "honey → golden drizzle; vitamin C → fresh citrus slices; charcoal → black "
-    "mineral texture; coffee → roasted beans; sunscreen → radiant sunlight.\n"
-    "• Convey the core benefit through mood and effects — e.g. glow/hydration → "
-    "dewy water droplets, soft luminous light, glass-skin sheen; sun protection "
-    "→ bright sunlight; freshness → crisp daylight.\n"
-    "• Specify the setting/surface, lighting, supporting props, mood, and a fitting "
-    "COLOR PALETTE, at high-end editorial/commercial quality (magazine campaign "
-    "look). Apply the requested visual treatment.\n"
-    "Keep the SINGLE product the hero. No people, no duplicate products, no text "
-    "or logos in the scene.\n"
+    "You are a creative director making a clean, premium product ad. The product "
+    "photo is supplied separately, so DO NOT describe the product — describe a "
+    "simple, uncluttered SCENE around it.\n"
+    "STEP 1 — Understand the product: its category, ONE hero ingredient/feature, "
+    "and its benefit. If the description is not in English (e.g. Korean), "
+    "translate it to English first.\n"
+    "STEP 2 — Write a SHORT, focused scene. Pick just ONE or TWO subtle ingredient "
+    "cues (e.g. rice toner → a few rice grains and a soft milky pool; sunscreen → "
+    "warm sunlight). Do NOT pile on many props, effects, or adjectives. Keep it "
+    "clean, minimal and uncluttered, with the product as the clear hero and plenty "
+    "of breathing room. Give a surface/setting, soft lighting, and a fitting color "
+    "palette — nothing more. Apply the requested treatment lightly. No people, no "
+    "duplicate products, no text.\n"
     "Output ONLY a JSON object with two keys:\n"
-    '  "prompt": string — the scene description in English (40-80 words), ending '
-    'with "premium photorealistic product advertisement, high-end editorial '
-    'lighting, commercial campaign quality"\n'
-    '  "style_tags": array of 5 strings — mood/style/palette keywords\n'
+    '  "prompt": a concise scene description in English (about 25-40 words, natural '
+    'language — not keyword spam), ending with "photorealistic product advertisement"\n'
+    '  "style_tags": array of 5 short mood/palette keywords\n'
     "No extra text, no markdown fences."
 )
 
