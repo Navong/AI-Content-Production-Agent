@@ -17,11 +17,11 @@ logger = logging.getLogger(__name__)
 
 # Official Replicate model — referenced by name, no version hash needed.
 IMAGE_MODEL = "black-forest-labs/flux-schnell"
-# Product-ad model: FLUX Kontext (Pruna-accelerated) — instruction-based image
-# editing that restages the product into a new scene while preserving the
-# product itself. Re-renders at high quality, so it also serves as the
-# enhancement step (no separate upscaler needed). ~5s/image.
-AD_MODEL = "prunaai/flux-kontext-fast:6efb57153457f8c51fb813c6d15f45d896f1916dd7d732af49d6a4b09488e2a6"
+# Product-ad model: FLUX 2 Pro — high-quality generation+editing with reference
+# images. Takes the product as a reference and restages it into a scene while
+# keeping it faithful; renders hero-ingredient props (rice, milk, citrus…)
+# crisply. Higher fidelity + quality than Kontext (a "pro" tier model).
+AD_MODEL = "black-forest-labs/flux-2-pro"
 MAX_ATTEMPTS = 3
 
 
@@ -32,11 +32,11 @@ def _extract_url(output) -> str:
 
 
 def generate_ad(product_image_url: str, scene_prompt: str) -> dict:
-    """Stage a product image into an advertising scene (FLUX Kontext).
+    """Stage a product image into an advertising scene (FLUX 2 Pro).
 
-    Kontext edits the input image per an instruction while preserving the
-    product, so we phrase `scene_prompt` as a "place the product here, keep it
-    unchanged" instruction. Returns {url, prompt_used, model, latency_ms}.
+    The product is passed as a reference image; the instruction asks the model
+    to place it into the scene while keeping it faithful. Returns
+    {url, prompt_used, model, latency_ms}.
     """
     instruction = (
         "Place the product into this setting. Keep the product's exact shape, "
@@ -52,15 +52,15 @@ def generate_ad(product_image_url: str, scene_prompt: str) -> dict:
             output = replicate.run(
                 AD_MODEL,
                 input={
-                    "img_cond_path": product_image_url,
                     "prompt": instruction,
+                    "input_images": [product_image_url],
                     "aspect_ratio": "1:1",
                     "output_format": "png",
                 },
             )
             url = _extract_url(output)
             latency_ms = int((time.monotonic() - start) * 1000)
-            logger.info("flux-kontext ok (attempt %d, %dms): %s", attempt, latency_ms, url)
+            logger.info("flux-2-pro ok (attempt %d, %dms): %s", attempt, latency_ms, url)
             return {
                 "url": url,
                 "prompt_used": instruction,
@@ -70,10 +70,10 @@ def generate_ad(product_image_url: str, scene_prompt: str) -> dict:
         except Exception as e:  # noqa: BLE001
             last_err = e
             backoff = 2 ** attempt
-            logger.warning("flux-kontext attempt %d failed: %s (retry in %ds)", attempt, e, backoff)
+            logger.warning("flux-2-pro attempt %d failed: %s (retry in %ds)", attempt, e, backoff)
             if attempt < MAX_ATTEMPTS:
                 time.sleep(backoff)
-    raise RuntimeError(f"flux-kontext failed after {MAX_ATTEMPTS} attempts: {last_err}")
+    raise RuntimeError(f"flux-2-pro failed after {MAX_ATTEMPTS} attempts: {last_err}")
 
 
 def generate_image(prompt: str, style_tags: list[str] | None = None) -> dict:
