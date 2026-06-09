@@ -618,7 +618,7 @@ export default function Home() {
           </h2>
           {iteration > 0 && (
             <span className="rounded-full border border-amber-500/30 bg-amber-500/10 px-2.5 py-0.5 text-[11px] font-medium text-amber-300">
-              {mode === "ad" ? `✨ variation ${iteration + 1} of 4` : `↻ retry · iteration ${iteration}`}
+              {mode === "ad" ? `✨ variation ${iteration + 1} of 3` : `↻ retry · iteration ${iteration}`}
             </span>
           )}
         </div>

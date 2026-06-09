@@ -11,7 +11,7 @@ from state import GraphState
 
 QUALITY_THRESHOLD = 8
 MAX_ITERATIONS = 3
-AD_VARIATIONS = 4  # ad mode: how many distinct styles to produce for the human
+AD_VARIATIONS = 3  # ad mode: how many distinct styles to produce for the human
 
 
 def supervisor(state: GraphState) -> dict:

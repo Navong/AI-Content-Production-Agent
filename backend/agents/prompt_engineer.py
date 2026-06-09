@@ -45,7 +45,6 @@ AD_STYLES = [
     "clean and minimal — simple, bright, lots of negative space, product clearly in focus",
     "premium and dramatic — rich directional lighting and an elevated, high-end mood that suits the product",
     "authentic lifestyle — the product in a real, relatable in-use setting that fits how it's actually used",
-    "bold and vibrant — energetic colors and a dynamic, eye-catching composition",
 ]
 
 SYSTEM_TEXT = (
