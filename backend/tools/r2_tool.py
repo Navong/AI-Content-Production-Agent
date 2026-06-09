@@ -125,6 +125,32 @@ def get_json(key: str) -> dict | None:
         return None
 
 
+def list_runs(limit: int = 48) -> list[dict]:
+    """Return the most recent run snapshots (durable history for the dashboard).
+
+    Lists the per-run JSON snapshots under sessions/, newest first, and injects
+    each run's thread_id (from the key). Empty if R2 isn't configured.
+    """
+    if not _r2_configured():
+        return []
+    try:
+        resp = _get_client().list_objects_v2(
+            Bucket=os.environ["R2_BUCKET_NAME"], Prefix="sessions/"
+        )
+    except (BotoCoreError, ClientError) as e:
+        logger.warning("list_runs failed: %s", e)
+        return []
+    objs = [o for o in resp.get("Contents", []) if o["Key"].endswith(".json")]
+    objs.sort(key=lambda o: o["LastModified"], reverse=True)
+    out: list[dict] = []
+    for o in objs[:limit]:
+        data = get_json(o["Key"])
+        if data:
+            data["thread_id"] = o["Key"].rsplit("/", 1)[-1].removesuffix(".json")
+            out.append(data)
+    return out
+
+
 def upload_bytes(data: bytes, content_type: str, thread_id: str, label: str) -> str | None:
     """Upload raw bytes (e.g. a user-uploaded product photo) to R2.
 

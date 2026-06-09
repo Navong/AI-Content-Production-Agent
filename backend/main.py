@@ -298,7 +298,26 @@ def api_config():
 
 
 @app.get("/api/runs")
-def get_runs(limit: int = 50):
+def get_runs(limit: int = 48):
+    """Durable run history for the dashboard (from R2 snapshots; falls back to
+    the local runs.jsonl if R2 isn't configured)."""
+    from tools.r2_tool import list_runs
+    snaps = list_runs(limit)
+    if snaps:
+        return [
+            {
+                "thread_id": s.get("thread_id", ""),
+                "brief": s.get("brief", ""),
+                "mode": s.get("mode", "text"),
+                "status": s.get("status", ""),
+                "score": s.get("score_at_pause", 0),
+                "iterations": s.get("iteration_at_pause", 0),
+                "image": s.get("image_at_pause", ""),
+                "published_url": s.get("published_url", ""),
+                "timestamp": s.get("started_at", ""),
+            }
+            for s in snaps
+        ]
     return _read_runs(limit)
 
 
