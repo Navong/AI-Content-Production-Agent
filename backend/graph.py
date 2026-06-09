@@ -28,7 +28,7 @@ from agents.supervisor import route, supervisor
 from state import GraphState
 
 
-def build_graph():
+def build_graph(checkpointer=None):
     g = StateGraph(GraphState)
 
     g.add_node("supervisor", supervisor)
@@ -54,9 +54,11 @@ def build_graph():
     g.add_edge("quality_eval", "supervisor")
     g.add_edge("hitl_gate", END)
 
-    # MemorySaver is fine for dev; swap for SqliteSaver to persist across restarts.
-    return g.compile(checkpointer=MemorySaver())
+    # Durable AsyncPostgresSaver is injected at startup when DATABASE_URL is set
+    # (see main.py lifespan); MemorySaver is the in-memory fallback / dev default.
+    return g.compile(checkpointer=checkpointer or MemorySaver())
 
 
-# Module-level singleton the API and smoke test import.
+# Module-level singleton (in-memory) the smoke test imports; the API swaps in a
+# Postgres-backed graph at startup.
 graph = build_graph()

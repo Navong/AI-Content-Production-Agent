@@ -38,7 +38,9 @@ from langgraph.types import Command
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from graph import graph
+from contextlib import asynccontextmanager
+
+from graph import build_graph, graph as _default_graph
 from state import initial_state
 
 logging.basicConfig(level=logging.INFO)
@@ -46,7 +48,50 @@ logger = logging.getLogger(__name__)
 
 SLACK_SIGNING_SECRET = os.getenv("SLACK_SIGNING_SECRET", "")
 
-app = FastAPI(title="AI Content Production Agent")
+# Swapped to a Postgres-backed graph (durable checkpointer) at startup; falls back
+# to the in-memory graph if DATABASE_URL is missing or setup fails.
+GRAPH = _default_graph
+DB_READY = False
+_pg_pool = None
+
+
+@asynccontextmanager
+async def lifespan(_app: "FastAPI"):
+    global GRAPH, DB_READY, _pg_pool
+    db_url = os.getenv("DATABASE_URL")
+    if db_url:
+        try:
+            from psycopg.rows import dict_row
+            from psycopg_pool import AsyncConnectionPool
+            from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+            import db as run_store
+
+            _pg_pool = AsyncConnectionPool(
+                conninfo=db_url,
+                max_size=10,
+                open=False,
+                kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+            )
+            await _pg_pool.open()
+            saver = AsyncPostgresSaver(_pg_pool)
+            await saver.setup()
+            GRAPH = build_graph(saver)
+            run_store.init_runs_table()
+            DB_READY = True
+            logger.info("Postgres durable checkpointer + run store ready")
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Postgres setup failed; using in-memory + R2: %s", e)
+    else:
+        logger.info("DATABASE_URL not set — using in-memory checkpointer + R2 snapshots")
+    yield
+    if _pg_pool is not None:
+        try:
+            await _pg_pool.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+app = FastAPI(title="AI Content Production Agent", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -163,23 +208,32 @@ def _persist_session(thread_id: str) -> None:
     if not s:
         return
     try:
-        from tools.r2_tool import put_json
         from tools.slack_tool import get_ts
         snap = {k: s.get(k) for k in _SNAPSHOT_KEYS}
         snap["slack_ts"] = get_ts(thread_id)
-        put_json(f"sessions/{thread_id}.json", snap)
+        import db as run_store
+        if run_store.db_configured():
+            run_store.upsert_run(thread_id, snap)
+        else:
+            from tools.r2_tool import put_json
+            put_json(f"sessions/{thread_id}.json", snap)
     except Exception as e:  # noqa: BLE001
         logger.warning("persist session failed (non-fatal): %s", e)
 
 
 def _get_session(thread_id: str) -> dict | None:
-    """In-memory session, or rehydrate it from the R2 snapshot after a restart."""
+    """In-memory session, or rehydrate it from the durable store after a restart."""
     s = sessions.get(thread_id)
     if s:
         return s
+    snap = None
     try:
-        from tools.r2_tool import get_json
-        snap = get_json(f"sessions/{thread_id}.json")
+        import db as run_store
+        if run_store.db_configured():
+            snap = run_store.get_run(thread_id)
+        else:
+            from tools.r2_tool import get_json
+            snap = get_json(f"sessions/{thread_id}.json")
     except Exception:  # noqa: BLE001
         snap = None
     if not snap:
@@ -203,7 +257,7 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
     score_at_pause = 0
     iteration_at_pause = 0
 
-    async for chunk in graph.astream(inputs, cfg, stream_mode="updates"):
+    async for chunk in GRAPH.astream(inputs, cfg, stream_mode="updates"):
 
         # ── HITL interrupt ────────────────────────────────────────────────
         if "__interrupt__" in chunk:
@@ -294,13 +348,17 @@ def health():
 def api_config():
     """Feature flags the studio reads on load (e.g. show 'Post to X' only when configured)."""
     from tools.x_tool import x_configured
-    return {"x_enabled": x_configured()}
+    return {"x_enabled": x_configured(), "durable": DB_READY}
 
 
 @app.get("/api/runs")
 def get_runs(limit: int = 48):
-    """Durable run history for the dashboard (from R2 snapshots; falls back to
-    the local runs.jsonl if R2 isn't configured)."""
+    """Durable run history for the dashboard (Postgres → R2 → local jsonl)."""
+    import db as run_store
+    if run_store.db_configured():
+        rows = run_store.list_runs(limit)
+        if rows:
+            return rows
     from tools.r2_tool import list_runs
     snaps = list_runs(limit)
     if snaps:
@@ -430,13 +488,16 @@ async def approve(body: ApproveRequest):
         if session.get("status") in ("approved", "rejected", "regenerated"):
             yield _sse({"event": "done", "status": session["status"]})
             return
-        # Rehydrated after a restart: the graph can't be resumed → finalize directly.
-        if session.get("_restored") or not session.get("config"):
+        # With a durable checkpointer (Postgres) the paused graph survives restarts,
+        # so we can truly resume even a rehydrated run. Without it, a rehydrated run
+        # has no graph state → finalize the decision directly.
+        if not DB_READY and (session.get("_restored") or not session.get("config")):
             yield _sse({"event": "done", "status": _finalize_decision(body.thread_id, body.action)})
             return
+        cfg = session.get("config") or _make_config(body.thread_id, session.get("brief", ""))
         try:
             async for evt in _stream_graph(
-                Command(resume={"action": body.action}), session["config"], body.thread_id
+                Command(resume={"action": body.action}), cfg, body.thread_id
             ):
                 yield evt
         except Exception as exc:
