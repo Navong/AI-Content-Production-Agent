@@ -12,22 +12,40 @@ Uses claude-sonnet-4-6. Retry bookkeeping lives here so the router stays pure.
 """
 from __future__ import annotations
 
+import json
+import re
 import time
 
 import anthropic
+
+
+def _extract_json(text: str) -> dict:
+    """Parse the model's JSON output, tolerating fences or surrounding prose."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("```")[1]
+        if text.startswith("json"):
+            text = text[4:]
+    m = re.search(r"\{.*\}", text, re.DOTALL)
+    if m:
+        text = m.group(0)
+    return json.loads(text)
 
 from state import GraphState
 
 PROMPT_MODEL = "claude-sonnet-4-6"
 MAX_ATTEMPTS = 3
 
-# Ad mode generates one ad per style direction (distinct looks for the human to
-# pick from), instead of a retry-until-good loop.
+# Ad mode generates one ad per visual TREATMENT (distinct looks for the human to
+# pick from), instead of a retry-until-good loop. These are mood/treatment levers
+# the creative director applies to a product-appropriate scene — not fixed
+# settings — so e.g. "dramatic" for sunscreen becomes golden-hour beach, not dark
+# velvet.
 AD_STYLES = [
-    "bright minimalist studio — clean seamless background, soft even lighting, generous negative space",
-    "luxury and moody — dramatic directional lighting, deep rich tones, premium surfaces (marble, velvet, dark wood)",
-    "natural lifestyle — the product in a real in-use setting with warm daylight and everyday props",
-    "bold and vibrant — energetic saturated colors, playful modern composition, eye-catching",
+    "clean and minimal — simple, bright, lots of negative space, product clearly in focus",
+    "premium and dramatic — rich directional lighting and an elevated, high-end mood that suits the product",
+    "authentic lifestyle — the product in a real, relatable in-use setting that fits how it's actually used",
+    "bold and vibrant — energetic colors and a dynamic, eye-catching composition",
 ]
 
 SYSTEM_TEXT = (
@@ -41,17 +59,26 @@ SYSTEM_TEXT = (
 )
 
 SYSTEM_AD = (
-    "You are a creative director at an advertising studio. You are given a PRODUCT "
-    "description. The product photo itself is supplied separately, so DO NOT "
-    "describe the product — describe the advertising SCENE to place it in: the "
-    "setting/surface, lighting, props, mood, and color palette for a premium, "
-    "photorealistic product ad. Keep the product the hero; avoid text, logos, or "
-    "people unless essential.\n"
+    "You are a creative director at an advertising studio creating a product ad.\n"
+    "STEP 1 — Understand the product. From the description, infer its CATEGORY and "
+    "the real-world context where it is used or shown, then build a scene that "
+    "fits that purpose. Examples: sunscreen → bright sunny beach / poolside / "
+    "outdoor with a sun-protection feel; coffee → warm morning, café or cozy "
+    "kitchen; perfume → elegant vanity or soft boudoir; running shoes → urban "
+    "street or active outdoors; skincare → clean fresh bathroom / spa. The scene "
+    "MUST be relevant to what the product is and how it's used.\n"
+    "If the description is NOT in English (e.g. Korean), translate it to English "
+    "first and write everything in English.\n"
+    "STEP 2 — The product photo is supplied separately, so DO NOT describe the "
+    "product — describe only the advertising SCENE: setting/surface, lighting, "
+    "props, mood, and palette. Apply the requested visual treatment while keeping "
+    "it relevant to the product. Keep the product the hero; avoid text, logos, or "
+    "people's faces unless essential.\n"
     "Output ONLY a JSON object with two keys:\n"
-    '  "prompt": string — the scene/setting description (≤60 words), ending with '
-    '"photorealistic product advertisement"\n'
+    '  "prompt": string — the scene/setting description in English (≤60 words), '
+    'ending with "photorealistic product advertisement"\n'
     '  "style_tags": array of 5 strings — mood/style keywords for the ad\n'
-    "No extra text, no markdown fences. On retry, incorporate the quality feedback."
+    "No extra text, no markdown fences."
 )
 
 _client: anthropic.Anthropic | None = None
@@ -76,8 +103,11 @@ def prompt_engineer(state: GraphState) -> dict:
         style = AD_STYLES[iteration % len(AD_STYLES)]
         user_content = (
             f"Product description: {state['brief']}\n\n"
-            f"Design the ad scene in THIS style direction: {style}\n"
-            "Keep the product the hero and make the scene visually distinct from other styles."
+            "Infer the product's category and natural usage context (translate the "
+            "description to English first if it isn't already), then design an ad "
+            "scene that genuinely fits the product's purpose — apply this visual "
+            f"treatment: {style}\n"
+            "Keep the product the hero and make this variation visually distinct."
         )
     else:
         user_content = f"Creative brief: {state['brief']}"
@@ -90,6 +120,7 @@ def prompt_engineer(state: GraphState) -> dict:
             )
 
     last_err: Exception | None = None
+    parsed: dict | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
         try:
             resp = _get_client().messages.create(
@@ -98,6 +129,8 @@ def prompt_engineer(state: GraphState) -> dict:
                 system=system,
                 messages=[{"role": "user", "content": user_content}],
             )
+            text = "".join(b.text for b in resp.content if b.type == "text")
+            parsed = _extract_json(text)
             break
         except anthropic.APIStatusError as e:
             last_err = e
@@ -105,17 +138,13 @@ def prompt_engineer(state: GraphState) -> dict:
                 time.sleep(2 ** (attempt - 1))
                 continue
             raise
-    else:
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            last_err = e
+            if attempt < MAX_ATTEMPTS:
+                continue  # model returned non-JSON — retry
+            raise RuntimeError(f"prompt_engineer JSON parse failed: {e}")
+    if parsed is None:
         raise RuntimeError(f"prompt_engineer failed after {MAX_ATTEMPTS} attempts: {last_err}")
-
-    import json
-    text = resp.content[0].text.strip()
-    # Strip accidental markdown fences
-    if text.startswith("```"):
-        text = text.split("```")[1]
-        if text.startswith("json"):
-            text = text[4:]
-    parsed = json.loads(text)
 
     refined = parsed["prompt"]
     tags = parsed.get("style_tags", [])[:5]
