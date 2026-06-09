@@ -41,8 +41,9 @@ def generate_ad(product_image_url: str, scene_prompt: str) -> dict:
     instruction = (
         "Place the product into this setting. Keep the product's exact shape, "
         "color and design from the source image, and do NOT add or alter any "
-        "text, label, or logo. Render the whole scene in crisp, high-resolution, "
-        f"professional product-photography quality with clean lighting. {scene_prompt}"
+        "text, label, or logo. Show only this single product — no duplicates, no "
+        "people. Render the whole scene in crisp, high-resolution, professional "
+        f"product-photography quality with clean lighting. {scene_prompt}"
     )
     last_err: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
