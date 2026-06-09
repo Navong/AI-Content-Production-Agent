@@ -120,14 +120,6 @@ def send_approval_request(
     raise RuntimeError("no Slack destination configured (SLACK_BOT_TOKEN+SLACK_CHANNEL or SLACK_WEBHOOK_URL)")
 
 
-def _x_enabled() -> bool:
-    try:
-        from tools.x_tool import x_configured
-        return x_configured()
-    except Exception:  # noqa: BLE001
-        return False
-
-
 def _approved_blocks(
     thread_id: str, image_url: str, score: int, brief: str, reviewer: str, tweet_url: str = ""
 ) -> list:
@@ -150,19 +142,14 @@ def _approved_blocks(
             "url": f"{APP_URL.rstrip('/')}/?thread={thread_id}",
         },
     ]
+    # Posting to X happens in the studio (not from Slack). After it's posted,
+    # the card shows a "View tweet" link.
     if tweet_url:
         elements.append({
             "type": "button",
             "action_id": "view_tweet",
             "text": {"type": "plain_text", "text": "View tweet ↗"},
             "url": tweet_url,
-        })
-    elif _x_enabled():
-        elements.append({
-            "type": "button",
-            "action_id": "post_to_x",
-            "text": {"type": "plain_text", "text": "🐦  Post to X"},
-            "value": thread_id,
         })
     return [
         {"type": "section", "text": {"type": "mrkdwn", "text": headline}},

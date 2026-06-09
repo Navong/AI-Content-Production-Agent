@@ -770,24 +770,36 @@ export default function Home() {
                       <p className="text-[11px] font-medium uppercase tracking-widest text-neutral-500">
                         Compose tweet
                       </p>
-                      <span
-                        className={`text-xs ${caption.length > 280 ? "text-red-400" : "text-neutral-600"}`}
-                      >
-                        {caption.length}/280
-                      </span>
+                      {captionLoading ? (
+                        <span className="flex items-center gap-1.5 text-xs font-medium text-sky-300">
+                          <Spinner /> ✨ AI is writing a caption…
+                        </span>
+                      ) : (
+                        <span className={`text-xs ${caption.length > 280 ? "text-red-400" : "text-neutral-600"}`}>
+                          {caption.length}/280
+                        </span>
+                      )}
                     </div>
-                    <textarea
-                      value={caption}
-                      onChange={(e) => setCaption(e.target.value)}
-                      rows={3}
-                      placeholder={captionLoading ? "Writing a caption…" : "What should the tweet say?"}
-                      className="w-full resize-none rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm outline-none transition placeholder:text-neutral-600 focus:border-sky-500/60"
-                    />
+                    <div className="relative">
+                      <textarea
+                        value={caption}
+                        onChange={(e) => setCaption(e.target.value)}
+                        rows={3}
+                        disabled={captionLoading}
+                        placeholder={captionLoading ? "" : "What should the tweet say?"}
+                        className="w-full resize-none rounded-xl border border-[var(--border)] bg-black/30 p-3 text-sm outline-none transition placeholder:text-neutral-600 focus:border-sky-500/60 disabled:opacity-60"
+                      />
+                      {captionLoading && (
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 rounded-xl bg-black/20 text-sm text-sky-300">
+                          <Spinner /> Generating caption with Claude…
+                        </div>
+                      )}
+                    </div>
                     {publishErr && <p className="text-xs text-red-400">{publishErr}</p>}
                     <div className="flex gap-2">
                       <button
                         onClick={publish}
-                        disabled={publishing || !caption.trim() || caption.length > 280}
+                        disabled={publishing || captionLoading || !caption.trim() || caption.length > 280}
                         className="flex items-center gap-1.5 rounded-xl bg-sky-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-sky-400 disabled:opacity-40"
                       >
                         {publishing ? <Spinner /> : "🐦"} Publish to X
