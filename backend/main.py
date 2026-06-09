@@ -68,6 +68,7 @@ async def lifespan(_app: "FastAPI"):
 
             _pg_pool = AsyncConnectionPool(
                 conninfo=db_url,
+                min_size=1,
                 max_size=10,
                 open=False,
                 kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
