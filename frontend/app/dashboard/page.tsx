@@ -61,7 +61,7 @@ export default function Dashboard() {
   const [filter, setFilter] = useState<Filter>("all");
 
   useEffect(() => {
-    fetch(`${API_URL}/api/runs?limit=60`)
+    fetch(`${API_URL}/api/runs?limit=60`, { cache: "no-store" })
       .then((r) => r.json())
       .then((data: Run[]) => {
         setRuns(Array.isArray(data) ? data : []);

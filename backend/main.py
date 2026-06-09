@@ -232,7 +232,7 @@ def _get_session(thread_id: str) -> dict | None:
         import db as run_store
         if run_store.db_configured():
             snap = run_store.get_run(thread_id)
-        else:
+        if snap is None:  # not in Postgres (or no DB) → try the R2 snapshot
             from tools.r2_tool import get_json
             snap = get_json(f"sessions/{thread_id}.json")
     except Exception:  # noqa: BLE001

@@ -125,7 +125,7 @@ function useEngine() {
   async function hydrateThread(t: string) {
     if (!t || t === threadRef.current) return; // already showing it
     try {
-      const res = await fetch(`${API_URL}/api/session/${t}`);
+      const res = await fetch(`${API_URL}/api/session/${t}`, { cache: "no-store" });
       if (res.status === 404) {
         setNotice("That run is no longer available.");
         return;
@@ -180,7 +180,7 @@ function useEngine() {
       const t = threadRef.current;
       if (!t) return;
       try {
-        const res = await fetch(`${API_URL}/api/session/${t}`);
+        const res = await fetch(`${API_URL}/api/session/${t}`, { cache: "no-store" });
         if (!res.ok) return;
         const s = await res.json();
         if (s.status === "approved" || s.status === "rejected") setStatus(s.status);
