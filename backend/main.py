@@ -398,6 +398,7 @@ def get_session(thread_id: str):
         "score": s.get("score_at_pause", 0),
         "iteration": s.get("iteration_at_pause", 0),
         "feedback": s.get("feedback_at_pause", ""),
+        "published_url": s.get("published_url", ""),
     }
 
 

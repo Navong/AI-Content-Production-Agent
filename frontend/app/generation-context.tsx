@@ -6,9 +6,11 @@ import {
   useState,
   useRef,
   useEffect,
+  Suspense,
   type ReactNode,
 } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -117,40 +119,52 @@ function useEngine() {
     }
   }
 
-  // Deep link from Slack's "Review in app" button.
-  useEffect(() => {
-    const t = new URLSearchParams(window.location.search).get("thread");
-    if (!t) return;
-    (async () => {
-      try {
-        const res = await fetch(`${API_URL}/api/session/${t}`);
-        if (res.status === 404) {
-          setNotice("That review link has expired — the run is no longer available.");
-          return;
-        }
-        if (!res.ok) return;
-        const s = await res.json();
-        threadRef.current = t;
-        setBrief(s.brief ?? "");
-        scoreRef.current = s.score ?? 0;
-        setScore(s.score ?? 0);
-        setFeedback(s.feedback ?? "");
-        setIteration(s.iteration ?? 0);
-        if (s.image) {
-          imageRef.current = s.image;
-          setImage(s.image);
-        }
-        if (s.status === "awaiting_approval") {
-          setActiveNode("hitl_gate");
-          setStatus("paused");
-        } else if (s.status === "approved" || s.status === "rejected") {
-          setStatus(s.status);
-        }
-      } catch {
-        /* leave idle */
+  // Load a specific run into the studio (deep link from Slack, or "open" on the
+  // dashboard). Re-runs whenever the ?thread param changes (see DeepLinkWatcher),
+  // so navigating between runs always shows the right one — not the latest.
+  async function hydrateThread(t: string) {
+    if (!t || t === threadRef.current) return; // already showing it
+    try {
+      const res = await fetch(`${API_URL}/api/session/${t}`);
+      if (res.status === 404) {
+        setNotice("That run is no longer available.");
+        return;
       }
-    })();
-  }, []);
+      if (!res.ok) return;
+      const s = await res.json();
+      threadRef.current = t;
+      setNotice("");
+      setBrief(s.brief ?? "");
+      scoreRef.current = s.score ?? 0;
+      setScore(s.score ?? 0);
+      setFeedback(s.feedback ?? "");
+      setIteration(s.iteration ?? 0);
+      resultsRef.current = [];
+      setResults([]);
+      setComposerOpen(false);
+      setCaption("");
+      setPublishErr("");
+      setTweetUrl(s.published_url ?? "");
+      if (s.image) {
+        imageRef.current = s.image;
+        setImage(s.image);
+      } else {
+        imageRef.current = "";
+        setImage("");
+      }
+      if (s.status === "awaiting_approval") {
+        setActiveNode("hitl_gate");
+        setStatus("paused");
+      } else if (s.status === "approved" || s.status === "rejected") {
+        setActiveNode("hitl_gate");
+        setStatus(s.status);
+      } else {
+        setStatus("idle");
+      }
+    } catch {
+      /* leave as-is */
+    }
+  }
 
   useEffect(() => {
     fetch(`${API_URL}/api/config`)
@@ -429,7 +443,7 @@ function useEngine() {
     uploading, uploadErr, composerOpen, setComposerOpen, caption, setCaption,
     captionLoading, publishing, tweetUrl, publishErr, xEnabled, fileRef,
     selectResult, onUpload, onGenerate, onAction, openComposer, publish,
-    toast, dismissToast,
+    toast, dismissToast, hydrateThread,
   };
 }
 
@@ -442,10 +456,27 @@ export function useGeneration(): Engine {
   return c;
 }
 
+// Watches the ?thread query param and re-hydrates the matching run on every
+// navigation (e.g. the dashboard's "open"). useSearchParams needs a Suspense
+// boundary, so it lives in its own component.
+function DeepLinkWatcher() {
+  const params = useSearchParams();
+  const thread = params.get("thread");
+  const { hydrateThread } = useGeneration();
+  useEffect(() => {
+    if (thread) hydrateThread(thread);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [thread]);
+  return null;
+}
+
 export function GenerationProvider({ children }: { children: ReactNode }) {
   const engine = useEngine();
   return (
     <Ctx.Provider value={engine}>
+      <Suspense fallback={null}>
+        <DeepLinkWatcher />
+      </Suspense>
       {children}
       <ToastView toast={engine.toast} onClose={engine.dismissToast} />
     </Ctx.Provider>
