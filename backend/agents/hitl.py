@@ -18,7 +18,9 @@ from langgraph.types import interrupt
 
 from state import GraphState
 
-_slack_enabled = bool(os.getenv("SLACK_WEBHOOK_URL"))
+# Enabled for either posting mode: a bot token (channel is auto-resolved) or an
+# incoming webhook. Without this, bot-token-only setups never sent a card.
+_slack_enabled = bool(os.getenv("SLACK_BOT_TOKEN") or os.getenv("SLACK_WEBHOOK_URL"))
 
 # Tracks which (thread_id, iteration) pauses have already sent a Slack card, so
 # the resume re-run of this node doesn't post a second one.

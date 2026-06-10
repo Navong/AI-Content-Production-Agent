@@ -25,10 +25,49 @@ SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "")
 APP_URL = os.getenv("APP_URL", "http://localhost:3000")
 
-# thread_id -> Slack message ts, so a studio decision can update the right card.
+# thread_id -> Slack message ts / channel, so a studio decision can update the
+# right card (the channel can differ from SLACK_CHANNEL when auto-detected).
 _ts_by_thread: dict[str, str] = {}
+_chan_by_thread: dict[str, str] = {}
 # thread_id -> last approved-card context, so "Posted to X" can rebuild the card.
 _card_ctx: dict[str, dict] = {}
+
+# Cached posting channel + the Slack errors that mean "this channel is unusable".
+_resolved_channel: str = ""
+_CHANNEL_ERRORS = {"channel_not_found", "is_archived", "not_in_channel", "channel_is_archived"}
+
+
+def _auto_channel() -> str:
+    """First channel the bot is a member of — used when SLACK_CHANNEL is unset or
+    stale (e.g. the old channel was deleted and the bot was invited to a new one).
+    Needs the channels:read / groups:read scope; returns "" if unavailable."""
+    if not SLACK_BOT_TOKEN:
+        return ""
+    try:
+        resp = requests.get(
+            "https://slack.com/api/users.conversations",
+            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+            params={"types": "public_channel,private_channel",
+                    "exclude_archived": "true", "limit": 200},
+            timeout=10,
+        )
+        chans = resp.json().get("channels", [])
+        return chans[0]["id"] if chans else ""
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Slack auto-channel lookup failed: %s", e)
+        return ""
+
+
+def _target_channel(refresh: bool = False) -> str:
+    """Channel to post into: the configured SLACK_CHANNEL, else a channel the bot
+    is in. `refresh=True` ignores the (stale) configured id and finds a live one,
+    so cards keep working after the bot is moved to a new channel."""
+    global _resolved_channel
+    if refresh:
+        _resolved_channel = _auto_channel()
+    elif not _resolved_channel:
+        _resolved_channel = SLACK_CHANNEL or _auto_channel()
+    return _resolved_channel
 
 
 def get_ts(thread_id: str) -> str:
@@ -98,18 +137,23 @@ def send_approval_request(
     blocks = _review_blocks(image_url, score, brief, iteration, thread_id)
     fallback = "Content ready for review"
 
-    if SLACK_BOT_TOKEN and SLACK_CHANNEL:
-        resp = requests.post(
-            "https://slack.com/api/chat.postMessage",
-            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-            json={"channel": SLACK_CHANNEL, "blocks": blocks, "text": fallback},
-            timeout=10,
-        )
-        data = resp.json()
+    if SLACK_BOT_TOKEN:
+        channel = _target_channel()
+        if not channel:
+            raise RuntimeError(
+                "no Slack channel — set SLACK_CHANNEL or invite the bot to a channel"
+            )
+        data = _post_message(channel, blocks, fallback)
+        # If the configured channel is gone/inaccessible, find a live one and retry.
+        if not data.get("ok") and data.get("error") in _CHANNEL_ERRORS:
+            channel = _target_channel(refresh=True)
+            if channel:
+                data = _post_message(channel, blocks, fallback)
         if not data.get("ok"):
             raise RuntimeError(f"slack chat.postMessage failed: {data.get('error')}")
         if thread_id and data.get("ts"):
             _ts_by_thread[thread_id] = data["ts"]
+            _chan_by_thread[thread_id] = channel
         return True
 
     if SLACK_WEBHOOK_URL:
@@ -117,7 +161,18 @@ def send_approval_request(
         r.raise_for_status()
         return r.text == "ok"
 
-    raise RuntimeError("no Slack destination configured (SLACK_BOT_TOKEN+SLACK_CHANNEL or SLACK_WEBHOOK_URL)")
+    raise RuntimeError("no Slack destination configured (SLACK_BOT_TOKEN or SLACK_WEBHOOK_URL)")
+
+
+def _post_message(channel: str, blocks: list, fallback: str) -> dict:
+    """POST chat.postMessage; returns the parsed Slack response (ok / error)."""
+    resp = requests.post(
+        "https://slack.com/api/chat.postMessage",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+        json={"channel": channel, "blocks": blocks, "text": fallback},
+        timeout=10,
+    )
+    return resp.json()
 
 
 def _approved_blocks(
@@ -160,12 +215,13 @@ def _approved_blocks(
 
 def _chat_update(thread_id: str, blocks: list, fallback: str) -> bool:
     ts = _ts_by_thread.get(thread_id)
-    if not (SLACK_BOT_TOKEN and SLACK_CHANNEL and ts):
+    channel = _chan_by_thread.get(thread_id) or _target_channel()
+    if not (SLACK_BOT_TOKEN and channel and ts):
         return False
     resp = requests.post(
         "https://slack.com/api/chat.update",
         headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-        json={"channel": SLACK_CHANNEL, "ts": ts, "blocks": blocks, "text": fallback},
+        json={"channel": channel, "ts": ts, "blocks": blocks, "text": fallback},
         timeout=10,
     )
     data = resp.json()
@@ -212,14 +268,15 @@ def delete_card(thread_id: str, ts: str = "") -> bool:
     deleted from the studio. `ts` lets the caller pass the persisted message ts
     so it works after a restart (when _ts_by_thread is empty)."""
     ts = ts or _ts_by_thread.get(thread_id, "")
+    channel = _chan_by_thread.pop(thread_id, "") or _target_channel()
     _ts_by_thread.pop(thread_id, None)
     _card_ctx.pop(thread_id, None)
-    if not (SLACK_BOT_TOKEN and SLACK_CHANNEL and ts):
+    if not (SLACK_BOT_TOKEN and channel and ts):
         return False
     resp = requests.post(
         "https://slack.com/api/chat.delete",
         headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-        json={"channel": SLACK_CHANNEL, "ts": ts},
+        json={"channel": channel, "ts": ts},
         timeout=10,
     )
     data = resp.json()
