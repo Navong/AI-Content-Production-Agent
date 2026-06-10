@@ -200,7 +200,7 @@ def _make_config(thread_id: str, brief: str) -> dict:
 _SNAPSHOT_KEYS = (
     "status", "brief", "mode", "product_image_url",
     "image_at_pause", "score_at_pause", "iteration_at_pause", "feedback_at_pause",
-    "reviewer", "published_url", "published_caption", "started_at",
+    "variations", "reviewer", "published_url", "published_caption", "started_at",
 )
 
 
@@ -257,6 +257,9 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
     """Yield SSE dicts for every graph update chunk."""
     score_at_pause = 0
     iteration_at_pause = 0
+    # Accumulate every generated variation so a restored pending run can show all
+    # of them (ad mode produces 3) — not just the last image_at_pause.
+    variations: list[dict] = sessions[session_id].get("variations") or []
 
     async for chunk in GRAPH.astream(inputs, cfg, stream_mode="updates"):
 
@@ -269,6 +272,7 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
             sessions[session_id]["score_at_pause"] = score_at_pause
             sessions[session_id]["iteration_at_pause"] = iteration_at_pause
             sessions[session_id]["image_at_pause"] = p.get("image_url", "")
+            sessions[session_id]["variations"] = variations
             _persist_session(session_id)  # durable snapshot (survives restarts)
             yield _sse({
                 "event": "awaiting_approval",
@@ -293,19 +297,29 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
                 })
 
             elif node_name == "image_gen" and updates.get("generated_url"):
+                variations.append({
+                    "iteration": len(variations),
+                    "url": updates["generated_url"],
+                    "score": 0,
+                    "feedback": "",
+                })
+                sessions[session_id]["variations"] = variations
                 yield _sse({
                     "event": "image_ready",
                     "url": updates["generated_url"],
                 })
 
             elif node_name == "quality_eval":
-                sessions[session_id]["feedback_at_pause"] = updates.get(
-                    "quality_feedback", ""
-                )
+                feedback = updates.get("quality_feedback", "")
+                score = updates.get("quality_score", 0)
+                sessions[session_id]["feedback_at_pause"] = feedback
+                if variations:  # attach to the variation just generated
+                    variations[-1]["score"] = score
+                    variations[-1]["feedback"] = feedback
                 yield _sse({
                     "event": "score_ready",
-                    "score": updates.get("quality_score", 0),
-                    "feedback": updates.get("quality_feedback", ""),
+                    "score": score,
+                    "feedback": feedback,
                 })
 
             elif node_name == "hitl_gate" and updates.get("status"):
@@ -420,6 +434,7 @@ def get_session(thread_id: str):
         "score": s.get("score_at_pause", 0),
         "iteration": s.get("iteration_at_pause", 0),
         "feedback": s.get("feedback_at_pause", ""),
+        "results": s.get("variations", []),
         "published_url": s.get("published_url", ""),
     }
 

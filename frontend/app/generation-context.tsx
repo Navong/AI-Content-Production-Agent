@@ -139,8 +139,19 @@ function useEngine() {
       setScore(s.score ?? 0);
       setFeedback(s.feedback ?? "");
       setIteration(s.iteration ?? 0);
-      resultsRef.current = [];
-      setResults([]);
+      // Restore every variation (ad mode produces 3) so the picker shows them all.
+      const hydrated: IterationResult[] = Array.isArray(s.results)
+        ? s.results
+            .filter((v: { url?: string }) => v && v.url)
+            .map((v: { iteration?: number; url: string; score?: number; feedback?: string }) => ({
+              iteration: v.iteration ?? 0,
+              imageUrl: v.url,
+              score: v.score ?? 0,
+              feedback: v.feedback ?? "",
+            }))
+        : [];
+      resultsRef.current = hydrated;
+      setResults(hydrated);
       setComposerOpen(false);
       setCaption("");
       setPublishErr("");
