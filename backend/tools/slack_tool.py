@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 SLACK_WEBHOOK_URL = os.getenv("SLACK_WEBHOOK_URL", "")
 SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN", "")
 SLACK_CHANNEL = os.getenv("SLACK_CHANNEL", "")
+# Set to "true" only if the bot also has the groups:read scope — lets channel
+# auto-detect include private channels (else Slack errors with missing_scope).
+SLACK_GROUPS_READ = os.getenv("SLACK_GROUPS_READ", "").lower() in ("1", "true", "yes")
 APP_URL = os.getenv("APP_URL", "http://localhost:3000")
 
 # thread_id -> Slack message ts / channel, so a studio decision can update the
@@ -44,15 +47,25 @@ def _auto_channel() -> str:
     channel" workflow. Needs the channels:read / groups:read scope; "" if absent."""
     if not SLACK_BOT_TOKEN:
         return ""
+    # Public channels need channels:read; including private_channel would also
+    # require groups:read or Slack rejects the whole call with missing_scope. We
+    # request only what channels:read covers, then add private channels when the
+    # extra scope is present.
+    types = "public_channel"
+    if SLACK_GROUPS_READ:
+        types += ",private_channel"
     try:
         resp = requests.get(
             "https://slack.com/api/users.conversations",
             headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
-            params={"types": "public_channel,private_channel",
-                    "exclude_archived": "true", "limit": 200},
+            params={"types": types, "exclude_archived": "true", "limit": 200},
             timeout=10,
         )
-        chans = resp.json().get("channels", [])
+        data = resp.json()
+        if not data.get("ok"):
+            logger.warning("Slack auto-channel lookup error: %s", data.get("error"))
+            return ""
+        chans = data.get("channels", [])
         if not chans:
             return ""
         chans.sort(key=lambda c: c.get("created", 0), reverse=True)
