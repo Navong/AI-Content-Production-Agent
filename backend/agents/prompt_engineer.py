@@ -2,10 +2,12 @@
 
 Two modes:
   * text — turns a creative brief into an SDXL text-to-image prompt + style tags.
-  * ad   — acts as a creative director: turns a PRODUCT description into an
-           advertising SCENE prompt (the setting around the product) for the
-           ad-inpaint model. The product itself is supplied as an image, so the
-           prompt describes only the environment, lighting, props, and mood.
+  * ad   — acts as a creative + casting director: turns a PRODUCT description into
+           an advertising direction that casts a Korean female model using or
+           presenting the product, framed on the body area / gesture that best
+           proves its benefit (eye cream → eye area, lip balm → lips, drink → a
+           sip…). The product is supplied as an image and kept faithful; the prompt
+           describes the model, gesture, framing, lighting and mood.
 
 On retry, the previous critique (suggested_fix) is folded in verbatim.
 Uses claude-sonnet-4-6. Retry bookkeeping lives here so the router stays pure.
@@ -42,9 +44,13 @@ MAX_ATTEMPTS = 3
 # settings — so e.g. "dramatic" for sunscreen becomes golden-hour beach, not dark
 # velvet.
 AD_STYLES = [
-    "clean and minimal — simple, bright, lots of negative space, product clearly in focus",
-    "premium and dramatic — rich directional lighting and an elevated, high-end mood that suits the product",
-    "authentic lifestyle — the product in a real, relatable in-use setting that fits how it's actually used",
+    "macro beauty close-up — tight, intimate crop on the model at the product's key "
+    "benefit point (e.g. eye area for eye cream, lips for lip balm, glowing cheek for "
+    "serum, a sip for a drink); bright, crisp and radiant",
+    "premium editorial portrait — the model elegantly using or presenting the product, "
+    "refined soft studio lighting, high-end campaign mood, immaculate glowing skin",
+    "bright natural lifestyle — the model using the product candidly in a real sunlit "
+    "setting (vanity, bathroom, by a window), fresh, warm and relatable",
 ]
 
 SYSTEM_TEXT = (
@@ -58,22 +64,29 @@ SYSTEM_TEXT = (
 )
 
 SYSTEM_AD = (
-    "You are a creative director making a clean, premium product ad. The product "
-    "photo is supplied separately, so DO NOT describe the product — describe a "
-    "simple, uncluttered SCENE around it.\n"
-    "STEP 1 — Understand the product: its category, ONE hero ingredient/feature, "
-    "and its benefit. If the description is not in English (e.g. Korean), "
-    "translate it to English first.\n"
-    "STEP 2 — Write a SHORT, focused scene. Pick just ONE or TWO subtle ingredient "
-    "cues (e.g. rice toner → a few rice grains and a soft milky pool; sunscreen → "
-    "warm sunlight). Do NOT pile on many props, effects, or adjectives. Keep it "
-    "clean, minimal and uncluttered, with the product as the clear hero and plenty "
-    "of breathing room. Give a surface/setting, soft lighting, and a fitting color "
-    "palette — nothing more. Apply the requested treatment lightly. No people, no "
-    "duplicate products, no text.\n"
+    "You are a creative director AND casting director for premium advertising. The "
+    "product photo is supplied separately and must stay EXACTLY as-is, so DO NOT "
+    "redescribe the product — describe the MODEL, her gesture, the framing, and the "
+    "scene around it.\n"
+    "STEP 1 — Understand the product: its category, ONE hero benefit, and — most "
+    "important — HOW a person naturally uses or shows it, and WHICH body area or "
+    "moment best proves that benefit. Examples: eye cream → the model's eye area, "
+    "bright and de-puffed; lip product → her lips; serum/moisturizer → a glowing "
+    "cheek or face; sunscreen → radiant skin in warm sunlight; hair product → "
+    "healthy flowing hair; a drink → her enjoying a sip; a gadget → her hands using "
+    "it. If the description is not in English (e.g. Korean), translate it first.\n"
+    "STEP 2 — Cast a Korean female model and stage her naturally USING or "
+    "PRESENTING the product, with the framing centered on that benefit area so the "
+    "result clearly shows the product working. Make her look healthy, radiant and "
+    "aspirational. Keep it clean and uncluttered — the model and the product are the "
+    "clear focus, with good breathing room. Apply the requested visual treatment. "
+    "Exactly ONE person and ONE product; no duplicates, no on-image text or logos.\n"
+    "If a product genuinely cannot involve a person, fall back to a clean hero "
+    "product scene instead.\n"
     "Output ONLY a JSON object with two keys:\n"
-    '  "prompt": a concise scene description in English (about 25-40 words, natural '
-    'language — not keyword spam), ending with "photorealistic product advertisement"\n'
+    '  "prompt": a concise model + scene direction in English (about 40-55 words, '
+    'natural language — not keyword spam), ending with "photorealistic advertising '
+    'photography"\n'
     '  "style_tags": array of 5 short mood/palette keywords\n'
     "No extra text, no markdown fences."
 )
@@ -100,11 +113,12 @@ def prompt_engineer(state: GraphState) -> dict:
         style = AD_STYLES[iteration % len(AD_STYLES)]
         user_content = (
             f"Product description: {state['brief']}\n\n"
-            "Infer the product's category and natural usage context (translate the "
-            "description to English first if it isn't already), then design an ad "
-            "scene that genuinely fits the product's purpose — apply this visual "
-            f"treatment: {style}\n"
-            "Keep the product the hero and make this variation visually distinct."
+            "Infer the product category, its key benefit, and the body area / gesture "
+            "that best demonstrates it (translate to English first if needed). Then "
+            "cast a Korean female model using or presenting the product, framed on "
+            f"that benefit area — apply this visual treatment: {style}\n"
+            "Keep the product and model the clear focus and make this variation "
+            "visually distinct."
         )
     else:
         user_content = f"Creative brief: {state['brief']}"

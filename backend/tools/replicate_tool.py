@@ -39,11 +39,13 @@ def generate_ad(product_image_url: str, scene_prompt: str) -> dict:
     {url, prompt_used, model, latency_ms}.
     """
     instruction = (
-        "Place the product into this setting. Keep the product's exact shape, "
-        "color and design from the source image, and do NOT add or alter any "
-        "text, label, or logo. Show only this single product — no duplicates, no "
-        "people. Render the whole scene in crisp, high-resolution, professional "
-        f"product-photography quality with clean lighting. {scene_prompt}"
+        "Edit this image into a finished advertisement. Keep the product's exact "
+        "shape, color, design and label from the source image — do NOT add or alter "
+        "any text, label, or logo, and show only this ONE product (no duplicates). "
+        "You MAY add a single person — the model — naturally using or presenting the "
+        "product as described, with realistic, healthy skin. Render photorealistic, "
+        "high-resolution professional advertising photography with clean lighting. "
+        f"{scene_prompt}"
     )
     last_err: Exception | None = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
