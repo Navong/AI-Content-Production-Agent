@@ -380,6 +380,20 @@ def get_runs(limit: int = 48):
     return _read_runs(limit)
 
 
+@app.delete("/api/runs/{thread_id}")
+def delete_run(thread_id: str):
+    """Remove a run from the dashboard history (Postgres + R2 snapshot + memory)."""
+    import db as run_store
+    run_store.delete_run(thread_id)
+    try:
+        from tools.r2_tool import delete_json
+        delete_json(f"sessions/{thread_id}.json")
+    except Exception as e:  # noqa: BLE001
+        logger.warning("R2 snapshot delete failed (non-fatal): %s", e)
+    sessions.pop(thread_id, None)
+    return {"deleted": thread_id}
+
+
 @app.get("/api/session/{thread_id}")
 def get_session(thread_id: str):
     """Snapshot of one run, used by the 'Review in app' deep link from Slack.

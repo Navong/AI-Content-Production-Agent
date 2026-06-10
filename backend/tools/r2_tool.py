@@ -125,6 +125,18 @@ def get_json(key: str) -> dict | None:
         return None
 
 
+def delete_json(key: str) -> bool:
+    """Delete a JSON object from R2 (e.g. a run snapshot). No-op if unconfigured."""
+    if not _r2_configured():
+        return False
+    try:
+        _get_client().delete_object(Bucket=os.environ["R2_BUCKET_NAME"], Key=key)
+        return True
+    except (BotoCoreError, ClientError) as e:
+        logger.warning("R2 delete_json failed: %s", e)
+        return False
+
+
 def list_runs(limit: int = 48) -> list[dict]:
     """Return the most recent run snapshots (durable history for the dashboard).
 

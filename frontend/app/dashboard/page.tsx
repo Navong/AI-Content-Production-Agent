@@ -92,6 +92,16 @@ export default function Dashboard() {
     };
   }, [runs]);
 
+  async function deleteRun(thread_id: string) {
+    if (!confirm("Delete this run? This can't be undone.")) return;
+    setRuns((prev) => prev.filter((r) => r.thread_id !== thread_id)); // optimistic
+    try {
+      await fetch(`${API_URL}/api/runs/${thread_id}`, { method: "DELETE" });
+    } catch {
+      // best-effort; a refresh will reconcile if the server-side delete failed
+    }
+  }
+
   const filtered = useMemo(() => {
     if (filter === "approved") return runs.filter((r) => r.status === "approved");
     if (filter === "published") return runs.filter((r) => r.published_url);
@@ -112,7 +122,7 @@ export default function Dashboard() {
           </div>
           <div className="leading-tight">
             <h1 className="text-[15px] font-semibold tracking-tight">Production Dashboard</h1>
-            <p className="text-[11px] text-neutral-500">Every run, durable · stored in R2</p>
+            <p className="text-[11px] text-neutral-500">Every run, durable · Postgres + R2</p>
           </div>
         </div>
         <Link
@@ -169,7 +179,7 @@ export default function Dashboard() {
           ) : (
             <section className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
               {filtered.map((r) => (
-                <RunCard key={r.thread_id} run={r} />
+                <RunCard key={r.thread_id} run={r} onDelete={deleteRun} />
               ))}
             </section>
           )}
@@ -201,10 +211,21 @@ function Stat({
   );
 }
 
-function RunCard({ run }: { run: Run }) {
+function RunCard({ run, onDelete }: { run: Run; onDelete: (id: string) => void }) {
   return (
     <div className="panel group overflow-hidden rounded-2xl">
       <div className="relative aspect-square bg-black/40">
+        <button
+          onClick={() => onDelete(run.thread_id)}
+          title="Delete run"
+          aria-label="Delete run"
+          className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-black/60 text-neutral-300 opacity-0 backdrop-blur transition hover:border-red-500/40 hover:bg-red-500/20 hover:text-red-300 focus:opacity-100 group-hover:opacity-100"
+        >
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            <line x1="10" y1="11" x2="10" y2="17" /><line x1="14" y1="11" x2="14" y2="17" />
+          </svg>
+        </button>
         {run.image ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={run.image} alt={run.brief} className="h-full w-full object-cover" />

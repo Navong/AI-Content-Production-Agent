@@ -110,6 +110,17 @@ def get_run(thread_id: str) -> dict | None:
         return None
 
 
+def delete_run(thread_id: str) -> None:
+    """Remove a run from the dashboard history."""
+    if not db_configured():
+        return
+    try:
+        with _get_pool().connection() as conn:
+            conn.execute("DELETE FROM runs WHERE thread_id = %s", (thread_id,))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("delete_run failed: %s", e)
+
+
 def list_runs(limit: int = 60) -> list[dict]:
     """Most-recent runs for the dashboard (one indexed query)."""
     if not db_configured():
