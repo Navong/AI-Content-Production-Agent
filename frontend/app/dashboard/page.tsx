@@ -133,7 +133,7 @@ export default function Dashboard() {
         </Link>
       </header>
 
-      {loading && <p className="text-neutral-600">Loading runs…</p>}
+      {loading && <DashboardSkeleton />}
       {error && <p className="text-red-400">Error: {error}</p>}
 
       {!loading && !error && (
@@ -207,6 +207,46 @@ function Stat({
         {value}
         {sub && <span className="ml-1.5 text-xs font-normal text-neutral-500">{sub}</span>}
       </p>
+    </div>
+  );
+}
+
+function DashboardSkeleton() {
+  return (
+    <div className="animate-pulse">
+      {/* Stats */}
+      <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-5">
+        {Array.from({ length: 5 }).map((_, i) => (
+          <div key={i} className="panel rounded-2xl p-4">
+            <div className="h-2.5 w-16 rounded bg-white/10" />
+            <div className="mt-2.5 h-6 w-10 rounded bg-white/10" />
+          </div>
+        ))}
+      </section>
+
+      {/* Filters */}
+      <div className="mt-6 flex flex-wrap gap-2">
+        {[14, 20, 22, 26].map((w, i) => (
+          <div key={i} className="h-6 rounded-full bg-white/10" style={{ width: `${w * 4}px` }} />
+        ))}
+      </div>
+
+      {/* Gallery */}
+      <section className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div key={i} className="panel overflow-hidden rounded-2xl">
+            <div className="aspect-square bg-white/[0.06]" />
+            <div className="space-y-2 p-3">
+              <div className="h-2.5 w-full rounded bg-white/10" />
+              <div className="h-2.5 w-2/3 rounded bg-white/10" />
+              <div className="mt-1 flex items-center justify-between">
+                <div className="h-2 w-12 rounded bg-white/10" />
+                <div className="h-2 w-10 rounded bg-white/10" />
+              </div>
+            </div>
+          </div>
+        ))}
+      </section>
     </div>
   );
 }
