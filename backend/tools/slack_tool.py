@@ -38,9 +38,10 @@ _CHANNEL_ERRORS = {"channel_not_found", "is_archived", "not_in_channel", "channe
 
 
 def _auto_channel() -> str:
-    """First channel the bot is a member of — used when SLACK_CHANNEL is unset or
-    stale (e.g. the old channel was deleted and the bot was invited to a new one).
-    Needs the channels:read / groups:read scope; returns "" if unavailable."""
+    """The most recently created channel the bot is a member of — used when
+    SLACK_CHANNEL is unset or stale (e.g. the old channel was deleted and the bot
+    was invited to a new one). Newest-first matches the "just add the bot to a new
+    channel" workflow. Needs the channels:read / groups:read scope; "" if absent."""
     if not SLACK_BOT_TOKEN:
         return ""
     try:
@@ -52,7 +53,10 @@ def _auto_channel() -> str:
             timeout=10,
         )
         chans = resp.json().get("channels", [])
-        return chans[0]["id"] if chans else ""
+        if not chans:
+            return ""
+        chans.sort(key=lambda c: c.get("created", 0), reverse=True)
+        return chans[0]["id"]
     except Exception as e:  # noqa: BLE001
         logger.warning("Slack auto-channel lookup failed: %s", e)
         return ""
