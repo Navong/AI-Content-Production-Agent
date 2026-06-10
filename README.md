@@ -10,6 +10,13 @@ LangGraph multi‑agent system.
 
 **Live:** Studio (Vercel) · API (Railway) · runs persisted in Postgres + Cloudflare R2
 
+## 🎬 Demo
+
+[![Watch the demo](https://img.youtube.com/vi/7kuSDi6p-fM/maxresdefault.jpg)](https://youtu.be/7kuSDi6p-fM)
+
+> Product photo → 3 ad variations → Slack review → human approval → auto‑posted to X.
+> ([watch on YouTube](https://youtu.be/7kuSDi6p-fM))
+
 ---
 
 ## What it does
