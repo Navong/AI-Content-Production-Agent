@@ -382,8 +382,16 @@ def get_runs(limit: int = 48):
 
 @app.delete("/api/runs/{thread_id}")
 def delete_run(thread_id: str):
-    """Remove a run from the dashboard history (Postgres + R2 snapshot + memory)."""
+    """Remove a run everywhere: Slack card + Postgres + R2 snapshot + memory."""
     import db as run_store
+    # Rehydrate the snapshot first (also re-seeds the Slack ts into memory) so we
+    # can delete the card even after a backend restart.
+    snap = _get_session(thread_id) or {}
+    try:
+        from tools.slack_tool import delete_card
+        delete_card(thread_id, snap.get("slack_ts", ""))
+    except Exception as e:  # noqa: BLE001
+        logger.warning("Slack card delete failed (non-fatal): %s", e)
     run_store.delete_run(thread_id)
     try:
         from tools.r2_tool import delete_json

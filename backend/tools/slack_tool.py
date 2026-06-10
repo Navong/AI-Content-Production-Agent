@@ -207,6 +207,28 @@ def update_on_decision(
     return ok
 
 
+def delete_card(thread_id: str, ts: str = "") -> bool:
+    """Delete the Slack card for a run (bot token only) — used when a run is
+    deleted from the studio. `ts` lets the caller pass the persisted message ts
+    so it works after a restart (when _ts_by_thread is empty)."""
+    ts = ts or _ts_by_thread.get(thread_id, "")
+    _ts_by_thread.pop(thread_id, None)
+    _card_ctx.pop(thread_id, None)
+    if not (SLACK_BOT_TOKEN and SLACK_CHANNEL and ts):
+        return False
+    resp = requests.post(
+        "https://slack.com/api/chat.delete",
+        headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+        json={"channel": SLACK_CHANNEL, "ts": ts},
+        timeout=10,
+    )
+    data = resp.json()
+    if not data.get("ok"):
+        logger.warning("slack chat.delete failed: %s", data.get("error"))
+        return False
+    return True
+
+
 def mark_posted_to_x(thread_id: str, tweet_url: str) -> bool:
     """Rebuild the approved card to show 'Posted to X' + a View tweet button."""
     ctx = _card_ctx.get(thread_id)
