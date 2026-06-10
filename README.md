@@ -28,34 +28,31 @@ LangGraph multi‑agent system.
 
 ## Architecture
 
+A central **supervisor** routes between four agents; each agent calls the tools it needs.
+
 ```mermaid
-flowchart TD
-    U[User · product image + description] --> API[FastAPI · SSE stream]
+flowchart LR
+    SUP{{supervisor<br/>router}}
 
-    subgraph G[LangGraph StateGraph · supervisor pattern]
-        SUP{{supervisor · pure router}}
-        PE[prompt_engineer<br/>claude-sonnet-4-6<br/>product-aware · multilingual]
-        IG[image_gen<br/>FLUX-2 Pro / FLUX schnell<br/>via Replicate]
-        QE[quality_eval<br/>claude-opus-4-8 vision]
-        HITL[hitl_gate<br/>interrupt + checkpointer]
+    SUP <--> PE[prompt_engineer]
+    SUP <--> IG[image_gen]
+    SUP <--> QE[quality_eval]
+    SUP <--> HITL[hitl_gate]
 
-        SUP --> PE --> SUP
-        SUP --> IG --> SUP
-        SUP --> QE --> SUP
-        SUP --> HITL
-    end
+    PE -.-> CLAUDE[[Claude<br/>sonnet-4-6 · opus-4-8]]
+    QE -.-> CLAUDE
+    IG -.-> REPLICATE[[Replicate<br/>flux-2-pro · flux-schnell]]
+    HITL -.-> SLACK[[Slack]]
+    HITL -.-> XTOOL[[X / Twitter]]
 
-    API --> G
-    HITL -->|notify · live card update| SLACK[Slack bot]
-    HITL -->|approve / regenerate / reject| API
-    API -->|Command resume| G
-    G -->|approved| X[Post to X · AI caption]
-
-    G <--> PG[(Postgres<br/>checkpointer + runs)]
-    IG --> R2[(Cloudflare R2<br/>images + snapshots)]
-    PG --> DASH[Next.js Studio + Dashboard]
-    R2 --> DASH
+    PE -.-> R2[[Cloudflare R2]]
+    IG -.-> R2
+    SUP -.-> PG[[Postgres<br/>checkpointer + runs]]
 ```
+
+**Agents** — `prompt_engineer` (product-aware, multilingual scenes) · `image_gen` ·
+`quality_eval` (vision scoring) · `hitl_gate` (human approval + publish).
+**Tools** — Claude · Replicate · Slack · X · R2 · Postgres.
 
 ### Routing
 
