@@ -54,7 +54,12 @@ export default function Home() {
             <IconSpark />
           </div>
           <div className="leading-tight">
-            <h1 className="text-[15px] font-semibold tracking-tight">AI Content Studio</h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-[15px] font-semibold tracking-tight">AI Content Studio</h1>
+              <span className="rounded-full border border-amber-500/30 bg-amber-500/15 px-2 py-0.5 text-[10px] font-medium text-amber-300">
+                Demo
+              </span>
+            </div>
             <p className="text-[11px] text-neutral-500">Multi-agent production pipeline</p>
           </div>
         </div>
@@ -68,6 +73,18 @@ export default function Home() {
           </Link>
         </div>
       </header>
+
+      {/* ── Demo notice ───────────────────────────────────────────────────────── */}
+      <div className="mb-4 flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.07] px-4 py-3 text-xs text-amber-200/90">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-px shrink-0">
+          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+          <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+        </svg>
+        <span>
+          <span className="font-semibold">Demo build</span> — authentication isn&apos;t implemented yet.
+          Every visitor shares the same workspace and all runs are public. Don&apos;t upload anything sensitive.
+        </span>
+      </div>
 
       {/* ── Command bar ───────────────────────────────────────────────────────── */}
       <section className="panel animate-fade-up rounded-2xl p-5">
