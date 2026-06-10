@@ -256,7 +256,7 @@ def update_on_decision(
     Approve → "✅ Approved by … " + Download / View in studio / Post to X.
     Reject/regenerate → a short status line. No-op when on webhook or no ts.
     """
-    if not (SLACK_BOT_TOKEN and SLACK_CHANNEL and _ts_by_thread.get(thread_id)):
+    if not (SLACK_BOT_TOKEN and _ts_by_thread.get(thread_id)):
         return False
 
     if status == "approved":
