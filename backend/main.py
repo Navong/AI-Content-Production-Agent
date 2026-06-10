@@ -512,21 +512,36 @@ async def approve(body: ApproveRequest):
         if session.get("status") in ("approved", "rejected", "regenerated"):
             yield _sse({"event": "done", "status": session["status"]})
             return
-        # With a durable checkpointer (Postgres) the paused graph survives restarts,
-        # so we can truly resume even a rehydrated run. Without it, a rehydrated run
-        # has no graph state → finalize the decision directly.
-        if not DB_READY and (session.get("_restored") or not session.get("config")):
+
+        cfg = session.get("config") or _make_config(body.thread_id, session.get("brief", ""))
+
+        # We can only truly resume when a *live* checkpoint with a pending
+        # interrupt exists. A run migrated from R2 (created before the Postgres
+        # checkpointer existed) or one whose state was never saved has no
+        # checkpoint — resuming it would re-run the graph from empty state and
+        # crash (KeyError 'brief'). In that case, finalize the decision directly.
+        resumable = bool(DB_READY and session.get("config") and not session.get("_restored"))
+        if DB_READY and not resumable:
+            try:
+                st = await GRAPH.aget_state(cfg)
+                resumable = bool(getattr(st, "next", None))  # pending node → resumable
+            except Exception:  # noqa: BLE001
+                resumable = False
+
+        if not resumable:
             yield _sse({"event": "done", "status": _finalize_decision(body.thread_id, body.action)})
             return
-        cfg = session.get("config") or _make_config(body.thread_id, session.get("brief", ""))
+
         try:
             async for evt in _stream_graph(
                 Command(resume={"action": body.action}), cfg, body.thread_id
             ):
                 yield evt
-        except Exception as exc:
-            logger.exception("resume error")
-            yield _sse({"event": "error", "message": str(exc)})
+        except Exception:  # noqa: BLE001
+            # Resume blew up despite a checkpoint — don't strand the reviewer;
+            # finalize the decision so the card/status still update.
+            logger.exception("resume error — finalizing directly")
+            yield _sse({"event": "done", "status": _finalize_decision(body.thread_id, body.action)})
 
     return EventSourceResponse(stream())
 
