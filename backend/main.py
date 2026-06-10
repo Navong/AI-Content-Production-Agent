@@ -380,6 +380,13 @@ def get_runs(limit: int = 48):
     return _read_runs(limit)
 
 
+@app.get("/api/slack/diag")
+def slack_diag():
+    """Temporary: report the live Slack setup (no secrets) to debug card posting."""
+    from tools.slack_tool import diagnostics
+    return diagnostics()
+
+
 @app.delete("/api/runs/{thread_id}")
 def delete_run(thread_id: str):
     """Remove a run everywhere: Slack card + Postgres + R2 snapshot + memory."""

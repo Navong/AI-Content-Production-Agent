@@ -40,6 +40,43 @@ _resolved_channel: str = ""
 _CHANNEL_ERRORS = {"channel_not_found", "is_archived", "not_in_channel", "channel_is_archived"}
 
 
+def diagnostics() -> dict:
+    """Non-sensitive snapshot of the Slack setup, for debugging prod (no tokens)."""
+    info: dict = {
+        "bot_token_present": bool(SLACK_BOT_TOKEN),
+        "webhook_present": bool(SLACK_WEBHOOK_URL),
+        "configured_channel": SLACK_CHANNEL or None,
+        "groups_read": SLACK_GROUPS_READ,
+        "auth_ok": False, "team": None, "scopes": None,
+        "channels": [], "resolved_channel": None, "error": None,
+    }
+    if not SLACK_BOT_TOKEN:
+        return info
+    try:
+        r = requests.post(
+            "https://slack.com/api/auth.test",
+            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"}, timeout=10,
+        )
+        d = r.json()
+        info.update(auth_ok=d.get("ok", False), team=d.get("team"),
+                    scopes=r.headers.get("x-oauth-scopes"), error=d.get("error"))
+        rr = requests.get(
+            "https://slack.com/api/users.conversations",
+            headers={"Authorization": f"Bearer {SLACK_BOT_TOKEN}"},
+            params={"types": "public_channel", "exclude_archived": "true", "limit": 50},
+            timeout=10,
+        )
+        dd = rr.json()
+        if dd.get("ok"):
+            info["channels"] = [f"{c['id']}:#{c.get('name')}" for c in dd.get("channels", [])]
+        else:
+            info["error"] = info["error"] or dd.get("error")
+        info["resolved_channel"] = _target_channel()
+    except Exception as e:  # noqa: BLE001
+        info["error"] = str(e)
+    return info
+
+
 def _auto_channel() -> str:
     """The most recently created channel the bot is a member of — used when
     SLACK_CHANNEL is unset or stale (e.g. the old channel was deleted and the bot
