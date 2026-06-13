@@ -261,93 +261,109 @@ async def _stream_graph(inputs, cfg: dict, session_id: str):
     # of them (ad mode produces 3) — not just the last image_at_pause.
     variations: list[dict] = sessions[session_id].get("variations") or []
 
-    async for chunk in GRAPH.astream(inputs, cfg, stream_mode="updates"):
+    # Hold the generator so we can close it cleanly if the client disconnects
+    # mid-stream (tab close / refresh / network drop). Otherwise Python throws
+    # GeneratorExit into LangGraph's astream and logs a noisy traceback.
+    agen = GRAPH.astream(inputs, cfg, stream_mode="updates")
+    try:
+        async for chunk in agen:
 
-        # ── HITL interrupt ────────────────────────────────────────────────
-        if "__interrupt__" in chunk:
-            p = chunk["__interrupt__"][0].value
-            score_at_pause = p.get("score", 0)
-            iteration_at_pause = p.get("iteration", 0)
-            sessions[session_id]["status"] = "awaiting_approval"
-            sessions[session_id]["score_at_pause"] = score_at_pause
-            sessions[session_id]["iteration_at_pause"] = iteration_at_pause
-            sessions[session_id]["image_at_pause"] = p.get("image_url", "")
-            sessions[session_id]["variations"] = variations
-            _persist_session(session_id)  # durable snapshot (survives restarts)
-            yield _sse({
-                "event": "awaiting_approval",
-                "image_url": p.get("image_url", ""),
-                "score": score_at_pause,
-                "brief": p.get("brief", ""),
-                "iteration": iteration_at_pause,
-            })
-            return
-
-        # ── Worker node updates ───────────────────────────────────────────
-        for node_name, updates in chunk.items():
-            if not isinstance(updates, dict):
-                continue
-
-            if node_name == "prompt_engineer":
-                yield _sse({
-                    "event": "node_done",
-                    "node": "prompt_engineer",
-                    "prompt": updates.get("refined_prompt", ""),
-                    "iteration": updates.get("iteration", 0),
-                })
-
-            elif node_name == "image_gen" and updates.get("generated_url"):
-                variations.append({
-                    "iteration": len(variations),
-                    "url": updates["generated_url"],
-                    "score": 0,
-                    "feedback": "",
-                })
+            # ── HITL interrupt ────────────────────────────────────────────
+            if "__interrupt__" in chunk:
+                p = chunk["__interrupt__"][0].value
+                score_at_pause = p.get("score", 0)
+                iteration_at_pause = p.get("iteration", 0)
+                sessions[session_id]["status"] = "awaiting_approval"
+                sessions[session_id]["score_at_pause"] = score_at_pause
+                sessions[session_id]["iteration_at_pause"] = iteration_at_pause
+                sessions[session_id]["image_at_pause"] = p.get("image_url", "")
                 sessions[session_id]["variations"] = variations
+                _persist_session(session_id)  # durable snapshot (survives restarts)
                 yield _sse({
-                    "event": "image_ready",
-                    "url": updates["generated_url"],
+                    "event": "awaiting_approval",
+                    "image_url": p.get("image_url", ""),
+                    "score": score_at_pause,
+                    "brief": p.get("brief", ""),
+                    "iteration": iteration_at_pause,
                 })
+                return
 
-            elif node_name == "quality_eval":
-                feedback = updates.get("quality_feedback", "")
-                score = updates.get("quality_score", 0)
-                sessions[session_id]["feedback_at_pause"] = feedback
-                if variations:  # attach to the variation just generated
-                    variations[-1]["score"] = score
-                    variations[-1]["feedback"] = feedback
-                yield _sse({
-                    "event": "score_ready",
-                    "score": score,
-                    "feedback": feedback,
-                })
+            # ── Worker node updates ────────────────────────────────────────
+            for node_name, updates in chunk.items():
+                if not isinstance(updates, dict):
+                    continue
 
-            elif node_name == "hitl_gate" and updates.get("status"):
-                status = updates["status"]
-                sessions[session_id]["status"] = status
-                # Log the completed run
-                _log_run(
-                    thread_id=session_id,
-                    status=status,
-                    final_score=sessions[session_id].get("score_at_pause", 0),
-                    iterations=sessions[session_id].get("iteration_at_pause", 0),
-                )
-                _persist_session(session_id)  # snapshot the terminal state
-                # Update the Slack card in place (bot-token mode only).
-                if status in ("approved", "rejected", "regenerated"):
-                    try:
-                        from tools.slack_tool import update_on_decision
-                        update_on_decision(
-                            thread_id=session_id,
-                            status=status,
-                            image_url=sessions[session_id].get("image_at_pause", ""),
-                            score=sessions[session_id].get("score_at_pause", 0),
-                            brief=sessions[session_id].get("brief", ""),
-                            reviewer=sessions[session_id].get("reviewer", "Studio"),
-                        )
-                    except Exception as e:  # noqa: BLE001
-                        logger.warning("Slack card update failed (non-fatal): %s", e)
-                yield _sse({"event": "done", "status": status})
+                if node_name == "prompt_engineer":
+                    yield _sse({
+                        "event": "node_done",
+                        "node": "prompt_engineer",
+                        "prompt": updates.get("refined_prompt", ""),
+                        "iteration": updates.get("iteration", 0),
+                    })
+
+                elif node_name == "image_gen" and updates.get("generated_url"):
+                    variations.append({
+                        "iteration": len(variations),
+                        "url": updates["generated_url"],
+                        "score": 0,
+                        "feedback": "",
+                    })
+                    sessions[session_id]["variations"] = variations
+                    yield _sse({
+                        "event": "image_ready",
+                        "url": updates["generated_url"],
+                    })
+
+                elif node_name == "quality_eval":
+                    feedback = updates.get("quality_feedback", "")
+                    score = updates.get("quality_score", 0)
+                    sessions[session_id]["feedback_at_pause"] = feedback
+                    if variations:  # attach to the variation just generated
+                        variations[-1]["score"] = score
+                        variations[-1]["feedback"] = feedback
+                    yield _sse({
+                        "event": "score_ready",
+                        "score": score,
+                        "feedback": feedback,
+                    })
+
+                elif node_name == "hitl_gate" and updates.get("status"):
+                    status = updates["status"]
+                    sessions[session_id]["status"] = status
+                    # Log the completed run
+                    _log_run(
+                        thread_id=session_id,
+                        status=status,
+                        final_score=sessions[session_id].get("score_at_pause", 0),
+                        iterations=sessions[session_id].get("iteration_at_pause", 0),
+                    )
+                    _persist_session(session_id)  # snapshot the terminal state
+                    # Update the Slack card in place (bot-token mode only).
+                    if status in ("approved", "rejected", "regenerated"):
+                        try:
+                            from tools.slack_tool import update_on_decision
+                            update_on_decision(
+                                thread_id=session_id,
+                                status=status,
+                                image_url=sessions[session_id].get("image_at_pause", ""),
+                                score=sessions[session_id].get("score_at_pause", 0),
+                                brief=sessions[session_id].get("brief", ""),
+                                reviewer=sessions[session_id].get("reviewer", "Studio"),
+                            )
+                        except Exception as e:  # noqa: BLE001
+                            logger.warning("Slack card update failed (non-fatal): %s", e)
+                    yield _sse({"event": "done", "status": status})
+    except (asyncio.CancelledError, GeneratorExit):
+        # Client disconnected mid-stream — expected, not an error. Log quietly
+        # and re-raise so the server tears the response down properly.
+        logger.info("stream %s closed early (client disconnected)", session_id)
+        raise
+    finally:
+        # Always close the underlying graph generator so it doesn't leak / log.
+        try:
+            await agen.aclose()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # ---------------------------------------------------------------------------
