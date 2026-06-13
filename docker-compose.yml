@@ -24,7 +24,11 @@ services:
       retries: 10
 
   backend:
-    build: ./backend
+    build:
+      context: ./backend
+      # Named .local so Railway's Dockerfile auto-detection ignores it (Railway
+      # uses a plain "Dockerfile" if present, overriding railway.toml's builder).
+      dockerfile: Dockerfile.local
     env_file:
       - path: ./backend/.env
         required: false

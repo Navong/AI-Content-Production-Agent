@@ -1,5 +1,0 @@
-# Railway builds with Nixpacks (see railway.toml). The Dockerfile here exists
-# only for local docker-compose — hide it so Railway never switches to a
-# Docker build.
-Dockerfile
-.dockerignore
