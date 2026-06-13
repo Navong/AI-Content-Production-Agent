@@ -73,15 +73,23 @@ async def lifespan(_app: "FastAPI"):
                 open=False,
                 kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
             )
-            await _pg_pool.open()
+            # Cap DB setup so an unreachable/slow Postgres can't hang startup past
+            # the healthcheck window — we fall back to in-memory + R2 instead.
+            await asyncio.wait_for(_pg_pool.open(), timeout=15)
             saver = AsyncPostgresSaver(_pg_pool)
-            await saver.setup()
+            await asyncio.wait_for(saver.setup(), timeout=15)
             GRAPH = build_graph(saver)
             run_store.init_runs_table()
             DB_READY = True
             logger.info("Postgres durable checkpointer + run store ready")
         except Exception as e:  # noqa: BLE001
-            logger.warning("Postgres setup failed; using in-memory + R2: %s", e)
+            logger.warning("Postgres setup failed/timed out; using in-memory + R2: %s", e)
+            if _pg_pool is not None:
+                try:
+                    await _pg_pool.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                _pg_pool = None
     else:
         logger.info("DATABASE_URL not set — using in-memory checkpointer + R2 snapshots")
     yield
