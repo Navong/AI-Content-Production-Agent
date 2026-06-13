@@ -15,6 +15,9 @@ frontend/next-env.d.ts.bak
 # Runtime data
 backend/runs.jsonl
 
+# LangGraph Studio (langgraph dev) local state
+backend/.langgraph_api/
+
 # Misc
 .DS_Store
 *.log

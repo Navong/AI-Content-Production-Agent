@@ -28,7 +28,9 @@ from agents.supervisor import route, supervisor
 from state import GraphState
 
 
-def build_graph(checkpointer=None):
+def _build_state_graph() -> StateGraph:
+    """Wire the nodes/edges. Compilation (with or without a checkpointer) is the
+    caller's choice, so the same topology serves the API, tests, and Studio."""
     g = StateGraph(GraphState)
 
     g.add_node("supervisor", supervisor)
@@ -53,10 +55,22 @@ def build_graph(checkpointer=None):
     g.add_edge("image_gen", "supervisor")
     g.add_edge("quality_eval", "supervisor")
     g.add_edge("hitl_gate", END)
+    return g
 
+
+def build_graph(checkpointer=None):
     # Durable AsyncPostgresSaver is injected at startup when DATABASE_URL is set
     # (see main.py lifespan); MemorySaver is the in-memory fallback / dev default.
-    return g.compile(checkpointer=checkpointer or MemorySaver())
+    return _build_state_graph().compile(checkpointer=checkpointer or MemorySaver())
+
+
+def make_studio_graph():
+    """Factory for LangGraph Studio / `langgraph dev` (see langgraph.json).
+
+    The LangGraph dev server supplies its own persistence, so the graph must be
+    compiled WITHOUT a checkpointer here — otherwise the server refuses to start
+    ("cannot use a custom checkpointer")."""
+    return _build_state_graph().compile()
 
 
 # Module-level singleton (in-memory) the smoke test imports; the API swaps in a

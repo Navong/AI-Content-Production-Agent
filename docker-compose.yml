@@ -1,0 +1,53 @@
+# Run the whole stack anywhere with:  docker compose up --build
+# Then open the studio at http://localhost:3000  (API at http://localhost:8000)
+#
+# Secrets (ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, R2_*, SLACK_*, X_*) are read
+# from backend/.env if present (copy backend/.env.example → backend/.env).
+# DATABASE_URL is overridden below to point at the bundled Postgres, so the app
+# is durable out of the box without any external database.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: content_agent
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build: ./backend
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      # Point at the bundled Postgres (overrides any DATABASE_URL in .env).
+      DATABASE_URL: postgresql://postgres:postgres@postgres:5432/content_agent
+      PORT: "8000"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        # Baked into the client bundle — the browser calls the API on the host.
+        NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

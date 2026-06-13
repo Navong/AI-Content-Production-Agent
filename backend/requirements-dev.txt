@@ -1,0 +1,5 @@
+# Dev-only tools (not installed in the production image).
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   langgraph dev          → opens LangGraph Studio against ./graph.py
+-r requirements.txt
+langgraph-cli[inmem]>=0.1.55

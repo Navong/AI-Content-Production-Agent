@@ -119,7 +119,23 @@ frontend/app/
 
 ## Setup
 
-### Backend
+### Run the whole stack with Docker (any environment)
+```bash
+cp backend/.env.example backend/.env   # fill in keys (ANTHROPIC_API_KEY, REPLICATE_API_TOKEN, …)
+docker compose up --build
+# Studio → http://localhost:3000   ·   API → http://localhost:8000/docs
+```
+Bundles Postgres + backend + frontend; `DATABASE_URL` is wired to the bundled
+Postgres automatically, so it's durable out of the box.
+
+### LangGraph Studio (visualize the agent graph)
+```bash
+cd backend
+pip install -r requirements.txt -r requirements-dev.txt
+langgraph dev        # opens Studio in the browser against ./graph.py
+```
+
+### Backend (manual)
 ```bash
 cd backend
 python -m venv .venv && .venv\Scripts\activate   # macOS/Linux: source .venv/bin/activate

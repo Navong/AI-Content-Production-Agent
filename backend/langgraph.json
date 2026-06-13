@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "content_agent": "./graph.py:make_studio_graph"
+  },
+  "env": ".env"
+}
